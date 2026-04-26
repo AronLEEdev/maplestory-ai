@@ -14,9 +14,8 @@ export async function runDoctor(): Promise<number> {
   const warn = (m: string) => console.log(chalk.yellow('!'), m)
 
   const major = Number(process.versions.node.split('.')[0])
-  major >= 20
-    ? pass(`Node ${process.versions.node}`)
-    : fail(`Node 20+ required, found ${process.versions.node}`)
+  if (major >= 20) pass(`Node ${process.versions.node}`)
+  else fail(`Node 20+ required, found ${process.versions.node}`)
 
   pass(`Platform: ${process.platform}-${process.arch}`)
 
@@ -35,9 +34,8 @@ export async function runDoctor(): Promise<number> {
     fail(`nut.js failed: ${(e as Error).message}`)
   }
 
-  process.env.ANTHROPIC_API_KEY
-    ? pass('ANTHROPIC_API_KEY set')
-    : warn('ANTHROPIC_API_KEY not set (needed for analyze)')
+  if (process.env.ANTHROPIC_API_KEY) pass('ANTHROPIC_API_KEY set')
+  else warn('ANTHROPIC_API_KEY not set (needed for analyze)')
 
   if (!existsSync('models/yolov8n-maplestory.onnx'))
     warn('models/yolov8n-maplestory.onnx missing — fetch via release')
