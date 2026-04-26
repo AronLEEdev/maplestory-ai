@@ -1,0 +1,89 @@
+import { describe, it, expect } from 'vitest'
+import { RoutineRunner, parseDuration } from '@/routine/runner'
+import { FakeClock } from '@/core/clock'
+import type { GameState, Action } from '@/core/types'
+import type { Routine } from '@/routine/schema'
+
+const routine: Routine = {
+  game: 'maplestory',
+  resolution: [1920, 1080],
+  window_title: 'MapleStory',
+  regions: {
+    hp: { x: 0, y: 0, w: 1, h: 1 },
+    mp: { x: 0, y: 0, w: 1, h: 1 },
+    minimap: { x: 0, y: 0, w: 1, h: 1 },
+  },
+  reflex: [],
+  perception: { model: 'm', fps: 8, classes: ['player'], confidence_threshold: 0.5 },
+  rotation: [
+    { when: 'mobs_in_range(300) >= 1', action: { kind: 'press', key: 'ctrl' }, cooldown_ms: 500 },
+    { every: '30s', action: { kind: 'press', key: 'shift' } },
+  ],
+  movement: {
+    primitives: [{ op: 'walk_to_x', x: 50 }],
+    loop: true,
+    pause_while_attacking: true,
+  },
+}
+
+function stateWithMobs(distance: number, playerX = 0): GameState {
+  return {
+    timestamp: 0,
+    player: { pos: { x: playerX, y: 0 }, screenPos: { x: playerX, y: 0 }, hp: 1, mp: 1 },
+    enemies:
+      distance >= 0
+        ? [{ type: 'mob_generic', pos: { x: playerX + distance, y: 0 }, distancePx: distance }]
+        : [],
+    flags: { runeActive: false, outOfBounds: false },
+    popup: null,
+  }
+}
+
+describe('parseDuration', () => {
+  it('parses seconds, minutes, hours', () => {
+    expect(parseDuration('30s')).toBe(30_000)
+    expect(parseDuration('5m')).toBe(300_000)
+    expect(parseDuration('2h')).toBe(7_200_000)
+  })
+})
+
+describe('RoutineRunner', () => {
+  it('fires rotation rule when condition true', () => {
+    const c = new FakeClock(0)
+    const got: Action[] = []
+    const r = new RoutineRunner(routine, c, (a) => got.push(a))
+    r.tick(stateWithMobs(100))
+    expect(got.some((a) => (a as { key: string }).key === 'ctrl')).toBe(true)
+  })
+
+  it('respects rotation cooldown', () => {
+    const c = new FakeClock(0)
+    const got: Action[] = []
+    const r = new RoutineRunner(routine, c, (a) => got.push(a))
+    r.tick(stateWithMobs(100))
+    r.tick(stateWithMobs(100))
+    expect(got.filter((a) => (a as { key: string }).key === 'ctrl').length).toBe(1)
+    c.tick(600)
+    r.tick(stateWithMobs(100))
+    expect(got.filter((a) => (a as { key: string }).key === 'ctrl').length).toBe(2)
+  })
+
+  it('fires `every` rule on cadence', () => {
+    const c = new FakeClock(0)
+    const got: Action[] = []
+    const r = new RoutineRunner(routine, c, (a) => got.push(a))
+    r.tick(stateWithMobs(-1))
+    expect(got.some((a) => (a as { key: string }).key === 'shift')).toBe(false)
+    c.tick(31_000)
+    r.tick(stateWithMobs(-1))
+    expect(got.some((a) => (a as { key: string }).key === 'shift')).toBe(true)
+  })
+
+  it('emits movement when no mob in range', () => {
+    const c = new FakeClock(0)
+    const got: Action[] = []
+    const r = new RoutineRunner(routine, c, (a) => got.push(a))
+    r.tick(stateWithMobs(-1, 0))
+    expect(got.some((a) => a.kind === 'press' && a.key === 'right')).toBe(true)
+  })
+})
