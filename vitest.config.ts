@@ -5,6 +5,7 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     globals: false,
     testTimeout: 10_000,
+    passWithNoTests: true,
   },
   resolve: { alias: { '@': new URL('./src/', import.meta.url).pathname } },
 })
