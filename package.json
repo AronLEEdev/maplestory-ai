@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "type": "module",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=18.18.0"
   },
   "bin": {
     "maplestory.ai": "./dist/cli.js"
@@ -42,12 +42,5 @@
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "onnxruntime-node",
-      "sharp"
-    ]
   }
 }
