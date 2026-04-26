@@ -12,8 +12,6 @@ TypeScript + Node 18+ / npm. YOLOv8 ONNX for object detection, sharp for image, 
 git clone https://github.com/AronLEEdev/maplestory-ai
 cd maplestory-ai
 npm install
-cp .env.example .env
-# edit .env → ANTHROPIC_API_KEY=sk-ant-...
 npm run build
 npm run dev -- doctor
 ```
@@ -27,10 +25,17 @@ npm run dev -- doctor
 npm run dev -- record --name arcana
 # play 2-3 cycles manually, F12 stops
 
-# 2. Send to Claude. Costs ~$0.05-0.15.
+# 2. Generate analysis prompt bundle. No API key, no network.
 npm run dev -- analyze recordings/arcana --out routines/arcana.yaml
 
-# 3. Open routines/arcana.yaml, sanity-check, remove `unreviewed: true`.
+# 3. Open Claude Code in this repo and run the slash command:
+#    /analyze-recording recordings/arcana/ANALYZE.md
+# Claude Code reads frames + logs and writes routines/arcana.yaml.
+#
+# (Optional: if you have an ANTHROPIC_API_KEY and prefer one-shot SDK:
+#  npm run dev -- analyze recordings/arcana --out routines/arcana.yaml --api )
+
+# 4. Open routines/arcana.yaml, sanity-check, remove `unreviewed: true`.
 
 # 4. Dry-run (logs only, no input sent).
 npm run dev -- run routines/arcana.yaml --mode dry-run

@@ -98,14 +98,34 @@ program
 program
   .command('analyze <recordingDir>')
   .requiredOption('--out <path>', 'output routine YAML path')
+  .option('--api', 'use Anthropic API (requires ANTHROPIC_API_KEY); default emits a Claude Code prompt bundle instead')
   .action(async (recordingDir, opts) => {
-    const key = process.env.ANTHROPIC_API_KEY
-    if (!key) {
-      logger.error('ANTHROPIC_API_KEY not set')
-      process.exit(1)
+    if (opts.api) {
+      const key = process.env.ANTHROPIC_API_KEY
+      if (!key) {
+        logger.error('--api flag set but ANTHROPIC_API_KEY missing')
+        process.exit(1)
+      }
+      await analyze({ recordingDir, outRoutinePath: opts.out, apiKey: key })
+      logger.info(`wrote ${opts.out}`)
+      return
     }
-    await analyze({ recordingDir, outRoutinePath: opts.out, apiKey: key })
-    logger.info(`wrote ${opts.out}`)
+    const { writePromptBundle } = await import('@/analyzer/prompt-bundle')
+    const { bundlePath, framesSampled } = writePromptBundle({
+      recordingDir,
+      outRoutinePath: opts.out,
+    })
+    logger.info({ bundlePath, framesSampled }, 'analyze: prompt bundle ready')
+    console.log(`
+Next step — let Claude Code do the analysis:
+
+  1. Open Claude Code in this repo (the \`claude\` CLI).
+  2. Run the slash command:    /analyze-recording ${bundlePath}
+     (or just say: "Read ${bundlePath} and follow it.")
+  3. Claude Code will read the frames + logs and write ${opts.out}.
+  4. Review the YAML, remove \`unreviewed: true\`, then dry-run:
+       npm run dev -- run ${opts.out} --mode dry-run
+`)
   })
 
 program
