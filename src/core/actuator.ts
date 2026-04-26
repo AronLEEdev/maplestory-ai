@@ -96,8 +96,8 @@ export class Actuator {
         backend: 'foreground-nut',
         timing: this.clock.now() - start,
       })
-    } catch {
-      // swallow; logging handled by orchestrator
+    } catch (err) {
+      this.bus.emit('action.error', { action, err })
     }
   }
 

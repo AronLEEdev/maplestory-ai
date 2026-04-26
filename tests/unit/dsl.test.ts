@@ -29,4 +29,22 @@ describe('compileWhen', () => {
     expect(() => compileWhen('process.exit(0)')).toThrow()
     expect(() => compileWhen('require("fs")')).toThrow()
   })
+
+  it('rejects malformed grammar at compile time, not run time', () => {
+    expect(() => compileWhen('hp hp hp')).toThrow()
+    expect(() => compileWhen('hp <')).toThrow()
+    expect(() => compileWhen('mobs_in_range(')).toThrow()
+    expect(() => compileWhen('(hp < 0.3')).toThrow()
+  })
+
+  it('supports && and ||', () => {
+    expect(compileWhen('hp < 0.6 && mp < 0.5')(state)).toBe(true)
+    expect(compileWhen('hp < 0.6 && mp > 0.5')(state)).toBe(false)
+    expect(compileWhen('hp > 0.9 || mp < 0.5')(state)).toBe(true)
+  })
+
+  it('supports parens', () => {
+    expect(compileWhen('(hp < 0.6) && (mp < 0.5)')(state)).toBe(true)
+    expect(compileWhen('(hp > 0.9 || mp < 0.5) && rune_active')(state)).toBe(false)
+  })
 })

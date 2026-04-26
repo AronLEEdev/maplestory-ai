@@ -12,6 +12,7 @@ export type BusEvents = {
   'reflex.vitals': { hp: number; mp: number }
   'action.submitted': { source: ActionSource; action: Action; priority: ActionPriority }
   'action.executed': { action: Action; backend: string; timing: number }
+  'action.error': { action: Action; err: unknown }
   'actuator.pause': { reason: string }
   'actuator.resume': Record<string, never>
   'actuator.abort': { reason: string }

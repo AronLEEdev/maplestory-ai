@@ -15,9 +15,12 @@ import { analyze } from '@/analyzer/index'
 import { runDoctor } from '@/doctor'
 import { logger } from '@/core/logger'
 import { YoloPerception } from '@/perception/yolo'
-import { ReflexWorker } from '@/reflex/pixel-sampler'
+import { ReflexWorker, redPixelRatio, bluePixelRatio } from '@/reflex/pixel-sampler'
 import { MinimapSampler } from '@/perception/minimap'
 import type { Rect, Action } from '@/core/types'
+import { defaultRegions } from '@/core/maplestory-defaults'
+import { ReplayWriter } from '@/replay/writer'
+import { join as pathJoin } from 'node:path'
 
 const program = new Command()
 program.name('maplestory.ai').description('Maplestory farming co-pilot').version('0.0.1')
@@ -34,20 +37,36 @@ program
   .requiredOption('--name <n>', 'recording name')
   .option('--out <dir>', 'output dir', 'recordings')
   .option('--fps <n>', 'frames per sec', '5')
+  .option('--width <n>', 'screen width', '1920')
+  .option('--height <n>', 'screen height', '1080')
   .action(async (opts) => {
     const cap = new ScreenshotDesktopCapture()
     const clock = new RealClock()
     const fg = await getForegroundWindowTitle()
+    const W = Number(opts.width)
+    const H = Number(opts.height)
+    const regions = defaultRegions(W, H)
+    const sampleVitals = async () => {
+      try {
+        const [hpBuf, mpBuf] = await Promise.all([
+          cap.captureRegion(regions.hp),
+          cap.captureRegion(regions.mp),
+        ])
+        return { hp: redPixelRatio(hpBuf), mp: bluePixelRatio(mpBuf) }
+      } catch {
+        return { hp: 1, mp: 1 }
+      }
+    }
     const recorder = new Recorder({
       outDir: opts.out,
       name: opts.name,
       clock,
       capture: () => cap.captureScreen(),
-      sampleVitals: async () => ({ hp: 1, mp: 1 }),
+      sampleVitals,
       framesPerSec: Number(opts.fps),
       onCaptureError: (err) => logger.warn({ err }, 'recorder: capture failed'),
     })
-    await recorder.start({ resolution: [1920, 1080], windowTitle: fg ?? 'MapleStory' })
+    await recorder.start({ resolution: [W, H], windowTitle: fg ?? 'MapleStory' })
 
     // Keystroke capture — feed every keydown/keyup into the recorder.
     // Skip F12 (the stop hotkey) so it doesn't pollute the recording.
@@ -177,10 +196,30 @@ program
         stop = true
       },
     })
+    bus.on('action.error', ({ action, err }) =>
+      logger.warn({ action, err }, 'actuator: backend threw'),
+    )
+
+    // Wire ReplayWriter — capture state/action/event stream for postmortem.
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const replayDir = pathJoin('recordings', 'runs', stamp)
+    const replay = new ReplayWriter(replayDir)
+    bus.on('state.built', (s) => replay.write('states', s))
+    bus.on('action.executed', (e) => replay.write('actions', e))
+    bus.on('action.error', (e) => replay.write('actions', e))
+    bus.on('actuator.pause', (e) => replay.write('events', { kind: 'pause', ...e }))
+    bus.on('actuator.resume', () => replay.write('events', { kind: 'resume' }))
+    bus.on('actuator.abort', (e) => replay.write('events', { kind: 'abort', ...e }))
+    logger.info({ replayDir }, 'replay artifact dir')
+
     hk.start()
     logger.info(`running in ${opts.mode}. F10 pause, F12 abort`)
     let consecutiveErrors = 0
     while (!stop) {
+      if (o.isPaused()) {
+        await new Promise((r) => setTimeout(r, 200))
+        continue
+      }
       try {
         await o.runOneTick()
         consecutiveErrors = 0
@@ -196,6 +235,7 @@ program
       await new Promise((r) => setTimeout(r, 100))
     }
     hk.stop()
+    await replay.close()
   })
 
 program.parseAsync(process.argv)

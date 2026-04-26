@@ -71,22 +71,51 @@ export class YoloPerception {
     const tensor = out[Object.keys(out)[0]] as ort.Tensor
     const data = tensor.data as Float32Array
     const dims = tensor.dims
-    const numAttrs = dims[1]
-    const N = dims[2]
+    if (dims.length !== 3 || dims[0] !== 1) {
+      throw new Error(`YOLO output unexpected shape: ${dims.join('x')}`)
+    }
+    // Autodetect channels-first [1, 4+C, N] vs channels-last [1, N, 4+C].
+    // 4+C is always small (4 + numClasses), N is anchors (typically 8400 for 640).
+    const expectedAttrs = 4 + this.opts.classes.length
+    let numAttrs: number
+    let N: number
+    let channelsFirst: boolean
+    if (dims[1] === expectedAttrs) {
+      channelsFirst = true
+      numAttrs = dims[1]
+      N = dims[2]
+    } else if (dims[2] === expectedAttrs) {
+      channelsFirst = false
+      numAttrs = dims[2]
+      N = dims[1]
+    } else {
+      // Fallback: pick the smaller axis as attrs (works when classes count is unknown).
+      channelsFirst = dims[1] < dims[2]
+      numAttrs = channelsFirst ? dims[1] : dims[2]
+      N = channelsFirst ? dims[2] : dims[1]
+      if (numAttrs - 4 !== this.opts.classes.length) {
+        throw new Error(
+          `YOLO output attrs=${numAttrs} but configured for ${this.opts.classes.length} classes (expected ${expectedAttrs})`,
+        )
+      }
+    }
     const numClasses = numAttrs - 4
+    const at = channelsFirst
+      ? (attr: number, i: number) => data[attr * N + i]
+      : (attr: number, i: number) => data[i * numAttrs + attr]
     const sz = this.opts.inputSize
     const sx = screenW / sz,
       sy = screenH / sz
     const dets: Detection[] = []
     for (let i = 0; i < N; i++) {
-      const cx = data[0 * N + i],
-        cy = data[1 * N + i],
-        w = data[2 * N + i],
-        h = data[3 * N + i]
+      const cx = at(0, i),
+        cy = at(1, i),
+        w = at(2, i),
+        h = at(3, i)
       let bestC = -1,
         bestP = 0
       for (let c = 0; c < numClasses; c++) {
-        const p = data[(4 + c) * N + i]
+        const p = at(4 + c, i)
         if (p > bestP) {
           bestP = p
           bestC = c

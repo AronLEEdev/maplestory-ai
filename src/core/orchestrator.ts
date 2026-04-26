@@ -121,4 +121,10 @@ export class Orchestrator {
   abort(reason = 'user') {
     this.actuator.abort(reason)
   }
+  isPaused() {
+    return this.actuator.isPaused()
+  }
+  isAborted() {
+    return this.actuator.isAborted()
+  }
 }
