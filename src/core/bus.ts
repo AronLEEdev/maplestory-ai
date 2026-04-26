@@ -24,15 +24,21 @@ export class TypedBus {
   private listeners: { [K in keyof BusEvents]?: Set<Listener<BusEvents[K]>> } = {}
 
   on<K extends keyof BusEvents>(ev: K, cb: Listener<BusEvents[K]>) {
-    const set = (this.listeners[ev] ??= new Set()) as Set<Listener<BusEvents[K]>>
+    let set = this.listeners[ev] as Set<Listener<BusEvents[K]>> | undefined
+    if (!set) {
+      set = new Set<Listener<BusEvents[K]>>()
+      ;(this.listeners as Record<string, unknown>)[ev as string] = set
+    }
     set.add(cb)
   }
 
   off<K extends keyof BusEvents>(ev: K, cb: Listener<BusEvents[K]>) {
-    this.listeners[ev]?.delete(cb as never)
+    const set = this.listeners[ev] as Set<Listener<BusEvents[K]>> | undefined
+    set?.delete(cb)
   }
 
   emit<K extends keyof BusEvents>(ev: K, payload: BusEvents[K]) {
-    this.listeners[ev]?.forEach((cb) => (cb as Listener<BusEvents[K]>)(payload))
+    const set = this.listeners[ev] as Set<Listener<BusEvents[K]>> | undefined
+    set?.forEach((cb) => cb(payload))
   }
 }
