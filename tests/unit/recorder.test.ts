@@ -33,4 +33,45 @@ describe('Recorder', () => {
     const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
     expect(meta.windowTitle).toBe('MapleStory')
   })
+
+  it('touches empty inputs.jsonl + vitals.jsonl on start (so analyzer never ENOENTs)', async () => {
+    const clock = new FakeClock(0)
+    const r = new Recorder({
+      outDir: root,
+      name: 'empty',
+      clock,
+      capture: async () => Buffer.from([0]),
+      sampleVitals: async () => ({ hp: 1, mp: 1 }),
+      framesPerSec: 5,
+    })
+    await r.start({ resolution: [1920, 1080], windowTitle: 'MapleStory' })
+    await r.stop()
+    const dir = join(root, 'empty')
+    expect(existsSync(join(dir, 'inputs.jsonl'))).toBe(true)
+    expect(existsSync(join(dir, 'vitals.jsonl'))).toBe(true)
+  })
+
+  it('captures errors via onCaptureError callback', async () => {
+    const errors: unknown[] = []
+    const clock = new FakeClock(0)
+    const r = new Recorder({
+      outDir: root,
+      name: 'cap-err',
+      clock,
+      capture: async () => {
+        throw new Error('display lost')
+      },
+      sampleVitals: async () => ({ hp: 1, mp: 1 }),
+      framesPerSec: 5,
+      onCaptureError: (e) => errors.push(e),
+    })
+    await r.start({ resolution: [1920, 1080], windowTitle: 'MapleStory' })
+    // Advance fake clock past first capture interval (1000/5 = 200ms)
+    clock.tick(250)
+    // Yield so the captureOnce promise rejects and onCaptureError fires
+    await new Promise((res) => setImmediate(res))
+    await r.stop()
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    expect((errors[0] as Error).message).toBe('display lost')
+  })
 })

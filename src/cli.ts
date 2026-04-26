@@ -45,14 +45,28 @@ program
       capture: () => cap.captureScreen(),
       sampleVitals: async () => ({ hp: 1, mp: 1 }),
       framesPerSec: Number(opts.fps),
+      onCaptureError: (err) => logger.warn({ err }, 'recorder: capture failed'),
     })
     await recorder.start({ resolution: [1920, 1080], windowTitle: fg ?? 'MapleStory' })
+
+    // Keystroke capture — feed every keydown/keyup into the recorder.
+    // Skip F12 (the stop hotkey) so it doesn't pollute the recording.
+    const { GlobalKeyboardListener } = await import('node-global-key-listener')
+    const startedAt = clock.now()
+    const keyListener = new GlobalKeyboardListener()
+    keyListener.addListener((e) => {
+      if (e.name === 'F12') return
+      const type = e.state === 'DOWN' ? 'keydown' : 'keyup'
+      recorder.recordKey({ type, key: String(e.name ?? ''), t: clock.now() - startedAt })
+    })
+
     logger.info('recording... press F12 to stop')
     await new Promise<void>((resolve) => {
       const hk = new HotkeyService({
         onPauseToggle: () => {},
         onAbort: async () => {
           await recorder.stop()
+          keyListener.kill()
           hk.stop()
           resolve()
         },
@@ -165,8 +179,20 @@ program
     })
     hk.start()
     logger.info(`running in ${opts.mode}. F10 pause, F12 abort`)
+    let consecutiveErrors = 0
     while (!stop) {
-      await o.runOneTick()
+      try {
+        await o.runOneTick()
+        consecutiveErrors = 0
+      } catch (err) {
+        consecutiveErrors++
+        logger.warn({ err, consecutiveErrors }, 'tick failed; continuing')
+        if (consecutiveErrors >= 10) {
+          logger.error('10 consecutive tick failures — aborting run')
+          o.abort('repeated_failures')
+          break
+        }
+      }
       await new Promise((r) => setTimeout(r, 100))
     }
     hk.stop()

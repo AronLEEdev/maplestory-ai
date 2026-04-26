@@ -10,6 +10,7 @@ export interface RecorderOpts {
   capture: () => Promise<Buffer>
   sampleVitals: () => Promise<{ hp: number; mp: number }>
   framesPerSec: number
+  onCaptureError?: (err: unknown) => void
 }
 
 export interface KeyEvent {
@@ -46,9 +47,13 @@ export class Recorder {
         2,
       ),
     )
+    // Touch inputs.jsonl + vitals.jsonl so the analyzer can read them
+    // even if no keystrokes / vitals samples land during the session.
+    writeFileSync(join(this.dir, 'inputs.jsonl'), '', { flag: 'a' })
+    writeFileSync(join(this.dir, 'vitals.jsonl'), '', { flag: 'a' })
     const periodMs = Math.floor(1000 / this.opts.framesPerSec)
     this.cancelTimer = this.opts.clock.setInterval(() => {
-      this.captureOnce().catch(() => {})
+      this.captureOnce().catch((err) => this.opts.onCaptureError?.(err))
     }, periodMs)
   }
 
