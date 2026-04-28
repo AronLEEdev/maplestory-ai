@@ -11,6 +11,8 @@ coverage
 data/calibrations/
 data/templates/
 
-# Override the user's global ~/.gitignore_global which excludes docs/
+# Override the user's global ~/.gitignore_global which excludes docs/ + .claude/
 !docs/
 !docs/**
+!.claude/
+!.claude/**

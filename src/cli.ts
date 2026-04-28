@@ -21,6 +21,7 @@ import type { Rect, Action } from '@/core/types'
 import { defaultRegions } from '@/core/maplestory-defaults'
 import { ReplayWriter } from '@/replay/writer'
 import { join as pathJoin } from 'node:path'
+import { runCalibrate, cropTemplates } from '@/perception/auto-calibrate'
 
 const program = new Command()
 program.name('maplestory.ai').description('Maplestory farming co-pilot').version('0.0.1')
@@ -30,6 +31,60 @@ program
   .description('Validate environment')
   .action(async () => {
     process.exit(await runDoctor())
+  })
+
+program
+  .command('calibrate <name>')
+  .description('Capture frames + emit a CALIBRATE.md prompt for Claude Code')
+  .option('--frames <n>', 'frames to capture', '10')
+  .option('--interval <ms>', 'ms between captures', '1000')
+  .option('--out <dir>', 'output dir', 'data/calibrations')
+  .action(async (name, opts) => {
+    const cap = new ScreenshotDesktopCapture()
+    const clock = new RealClock()
+    logger.info(`focus Maplestory; capturing ${opts.frames} frames @ ${opts.interval}ms`)
+    const r = await runCalibrate({
+      capture: cap,
+      clock,
+      outDir: opts.out,
+      name,
+      frames: Number(opts.frames),
+      intervalMs: Number(opts.interval),
+    })
+    logger.info({ ...r }, 'calibration captured')
+    console.log(`
+Next step — let Claude Code identify the mobs:
+
+  1. Open Claude Code in this repo (the \`claude\` CLI).
+  2. Run the slash command:
+       /calibrate-map ${r.bundlePath}
+     (Or just say: "Read ${r.bundlePath} and follow it.")
+  3. Claude Code will write ${r.calibrationDir}/manifest-source.json.
+  4. Then run:
+       npm run dev -- crop-templates ${name}
+`)
+  })
+
+program
+  .command('crop-templates <name>')
+  .description('Crop template PNGs from a Claude-Code-produced manifest-source.json')
+  .option('--calibrations <dir>', 'calibrations dir', 'data/calibrations')
+  .option('--templates <dir>', 'templates output dir', 'data/templates')
+  .action(async (name, opts) => {
+    const calibrationDir = pathJoin(opts.calibrations, name)
+    const templatesDir = pathJoin(opts.templates, name)
+    const r = await cropTemplates({ calibrationDir, templatesDir })
+    logger.info(r, 'templates cropped')
+    console.log(`
+Templates ready at ${templatesDir}/
+
+In your routine YAML set:
+  perception:
+    mode: template
+    template_dir: ${templatesDir}
+    fps: 12
+    match_threshold: 0.75
+`)
   })
 
 program
