@@ -8,3 +8,9 @@ recordings/
 .vscode
 .idea
 coverage
+data/calibrations/
+data/templates/
+
+# Override the user's global ~/.gitignore_global which excludes docs/
+!docs/
+!docs/**
