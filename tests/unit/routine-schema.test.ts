@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import YAML from 'yaml'
-import { Routine } from '@/routine/schema'
+import { Routine, coerceLegacyPerception } from '@/routine/schema'
 
 const valid = `
 game: maplestory
@@ -15,6 +15,7 @@ reflex:
   - { region: hp, metric: red_pixel_ratio, below: 0.30, cooldown_ms: 800,
       action: { kind: press, key: page_up } }
 perception:
+  mode: yolo
   model: yolov8n-maplestory
   fps: 8
   classes: [player, mob_generic, rune, portal]
@@ -52,5 +53,42 @@ describe('Routine schema', () => {
     const obj = YAML.parse(valid)
     obj.rotation.push({ bogus: 1 })
     expect(() => Routine.parse(obj)).toThrow()
+  })
+
+  it('accepts perception.mode = template', () => {
+    const obj = YAML.parse(valid)
+    obj.perception = {
+      mode: 'template',
+      template_dir: 'data/templates/x',
+      fps: 12,
+      match_threshold: 0.75,
+      stride: 2,
+    }
+    expect(() => Routine.parse(obj)).not.toThrow()
+  })
+
+  it('rejects perception block missing mode discriminator', () => {
+    const obj = YAML.parse(valid)
+    delete obj.perception.mode
+    expect(() => Routine.parse(obj)).toThrow()
+  })
+
+  it('coerceLegacyPerception injects mode: yolo when missing', () => {
+    const obj = YAML.parse(valid)
+    delete obj.perception.mode
+    coerceLegacyPerception(obj)
+    expect(obj.perception.mode).toBe('yolo')
+    expect(() => Routine.parse(obj)).not.toThrow()
+  })
+
+  it('coerceLegacyPerception leaves mode alone when present', () => {
+    const obj = YAML.parse(valid)
+    obj.perception.mode = 'template'
+    obj.perception.template_dir = 'data/templates/x'
+    delete obj.perception.model
+    delete obj.perception.classes
+    delete obj.perception.confidence_threshold
+    coerceLegacyPerception(obj)
+    expect(obj.perception.mode).toBe('template')
   })
 })

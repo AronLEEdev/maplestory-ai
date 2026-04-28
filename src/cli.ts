@@ -2,7 +2,7 @@ import { Command } from 'commander'
 import { readFileSync, existsSync } from 'node:fs'
 import YAML from 'yaml'
 import 'dotenv/config'
-import { Routine } from '@/routine/schema'
+import { Routine, coerceLegacyPerception } from '@/routine/schema'
 import { Orchestrator, type RunMode } from '@/core/orchestrator'
 import { TypedBus } from '@/core/bus'
 import { RealClock } from '@/core/clock'
@@ -17,6 +17,7 @@ import { logger } from '@/core/logger'
 import { YoloPerception } from '@/perception/yolo'
 import { ReflexWorker, redPixelRatio, bluePixelRatio } from '@/reflex/pixel-sampler'
 import { MinimapSampler } from '@/perception/minimap'
+import { TemplateLibrary } from '@/perception/template-library'
 import type { Rect, Action } from '@/core/types'
 import { defaultRegions } from '@/core/maplestory-defaults'
 import { ReplayWriter } from '@/replay/writer'
@@ -196,20 +197,44 @@ program
       logger.error('routine marked unreviewed: true — review and remove flag first')
       process.exit(1)
     }
+    coerceLegacyPerception(obj)
     const routine = Routine.parse(obj)
     const bus = new TypedBus()
     const clock = new RealClock()
     const backend = new ForegroundNutBackend()
     const cap = new ScreenshotDesktopCapture()
-    const yolo = new YoloPerception({
-      modelPath: `models/${routine.perception.model}.onnx`,
-      classes: routine.perception.classes,
-      confidenceThreshold: routine.perception.confidence_threshold,
-    })
-    if (existsSync(`models/${routine.perception.model}.onnx`)) {
-      await yolo.load()
+
+    // Branch perception path on routine.perception.mode.
+    let yolo: YoloPerception | undefined
+    let templateLibrary: TemplateLibrary | undefined
+    let templateThreshold: number | undefined
+    let templateStride: number | undefined
+    let templateSearchRegion: Rect | undefined
+    if (routine.perception.mode === 'yolo') {
+      yolo = new YoloPerception({
+        modelPath: `models/${routine.perception.model}.onnx`,
+        classes: routine.perception.classes,
+        confidenceThreshold: routine.perception.confidence_threshold,
+      })
+      if (existsSync(`models/${routine.perception.model}.onnx`)) {
+        await yolo.load()
+      } else {
+        logger.warn('YOLO model missing — perception disabled')
+      }
     } else {
-      logger.warn('YOLO model missing — perception disabled')
+      // mode === 'template'
+      if (!existsSync(routine.perception.template_dir)) {
+        logger.error(`template_dir not found: ${routine.perception.template_dir}`)
+        process.exit(1)
+      }
+      templateLibrary = await TemplateLibrary.load(routine.perception.template_dir)
+      templateThreshold = routine.perception.match_threshold
+      templateStride = routine.perception.stride
+      templateSearchRegion = routine.perception.search_region
+      logger.info(
+        { templates: templateLibrary.size(), classes: templateLibrary.classes() },
+        'template library loaded',
+      )
     }
 
     const minimapColor = routine.minimap_player_color ?? {
@@ -254,6 +279,10 @@ program
       capture: cap,
       reflex,
       minimap,
+      templateLibrary,
+      templateThreshold,
+      templateStride,
+      templateSearchRegion,
       bounds: routine.bounds
         ? {
             x: routine.bounds.x as [number, number],

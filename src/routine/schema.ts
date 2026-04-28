@@ -9,12 +9,24 @@ export const ReflexEntry = z.object({
   action: Action,
 })
 
-export const PerceptionConfig = z.object({
+export const PerceptionYolo = z.object({
+  mode: z.literal('yolo'),
   model: z.string(),
   fps: z.number().min(1).max(30),
   classes: z.array(z.string()).min(1),
   confidence_threshold: z.number().min(0).max(1),
 })
+
+export const PerceptionTemplate = z.object({
+  mode: z.literal('template'),
+  template_dir: z.string(),
+  fps: z.number().min(1).max(30),
+  match_threshold: z.number().min(0).max(1).default(0.75),
+  stride: z.number().int().min(1).max(8).default(2),
+  search_region: Rect.optional(),
+})
+
+export const PerceptionConfig = z.discriminatedUnion('mode', [PerceptionYolo, PerceptionTemplate])
 
 export const RotationRule = z.union([
   z.object({
@@ -64,6 +76,21 @@ export const MinimapPlayerColor = z.object({
   rgb: z.tuple([z.number(), z.number(), z.number()]),
   tolerance: z.number(),
 })
+
+/**
+ * Backward compat: v1 routines stored perception as a flat object without a
+ * `mode` discriminator. Treat any such legacy block as `mode: 'yolo'`.
+ *
+ * Mutates `obj` in place and returns it. Callers should use this before
+ * Routine.parse() when reading user-authored YAML/JSON.
+ */
+export function coerceLegacyPerception<T extends Record<string, unknown>>(obj: T): T {
+  const p = (obj as { perception?: Record<string, unknown> }).perception
+  if (p && typeof p === 'object' && !p.mode) {
+    p.mode = 'yolo'
+  }
+  return obj
+}
 
 export const Routine = z.object({
   game: z.literal('maplestory'),

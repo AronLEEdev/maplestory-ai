@@ -37,9 +37,12 @@ export async function runDoctor(): Promise<number> {
   if (process.env.ANTHROPIC_API_KEY) pass('ANTHROPIC_API_KEY set')
   else warn('ANTHROPIC_API_KEY not set (needed for analyze)')
 
-  if (!existsSync('models/yolov8n-maplestory.onnx'))
-    warn('models/yolov8n-maplestory.onnx missing — fetch via release')
-  else pass('YOLO model present')
+  // Both perception paths are valid; surface what's available without failing.
+  if (existsSync('models/yolov8n-maplestory.onnx')) pass('YOLO model present (mode: yolo)')
+  else warn('models/yolov8n-maplestory.onnx missing (only matters for mode: yolo)')
+
+  if (existsSync('data/templates')) pass('data/templates dir present (mode: template)')
+  else warn('data/templates missing — run `calibrate` to bootstrap (mode: template)')
 
   const fg = await getForegroundWindowTitle()
   if (fg && fg.toLowerCase().includes('maplestory')) pass(`Maplestory focused: ${fg}`)
