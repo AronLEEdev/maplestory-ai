@@ -11,6 +11,8 @@ import type { ReflexWorker } from '@/reflex/pixel-sampler'
 import type { YoloPerception } from '@/perception/yolo'
 import type { CaptureProvider } from '@/capture/index'
 import type { MinimapSampler } from '@/perception/minimap'
+import type { TemplateLibrary } from '@/perception/template-library'
+import type { Rect, PerceptionFrame } from './types'
 
 export type RunMode = 'dry-run' | 'safe' | 'live'
 
@@ -30,6 +32,11 @@ export interface OrchestratorOpts {
   bounds?: Bounds
   boundsMargin?: number
   actuatorJitterMs?: number
+  // Template-perception path (alternative to yolo)
+  templateLibrary?: TemplateLibrary
+  templateThreshold?: number
+  templateStride?: number
+  templateSearchRegion?: Rect
 }
 
 export class Orchestrator {
@@ -83,14 +90,57 @@ export class Orchestrator {
     let state: GameState | null = null
     if (this.states) {
       state = this.states[this.stateIdx++ % this.states.length]
-    } else if (this.opts.yolo && this.opts.capture) {
+    } else if (this.opts.capture && (this.opts.yolo || this.opts.templateLibrary)) {
       const buf = await this.opts.capture.captureScreen()
       const sharp = (await import('sharp')).default
       const meta = await sharp(buf).metadata()
-      const [frame, minimapPos] = await Promise.all([
-        this.opts.yolo.run(buf, meta.width ?? 1920, meta.height ?? 1080),
-        this.opts.minimap ? this.opts.minimap.sample() : Promise.resolve(null),
-      ])
+      const screenW = meta.width ?? 1920
+      const screenH = meta.height ?? 1080
+
+      let frame: PerceptionFrame
+      if (this.opts.yolo) {
+        frame = await this.opts.yolo.run(buf, screenW, screenH)
+      } else {
+        // Template path. Optionally crop to a search region first.
+        const lib = this.opts.templateLibrary!
+        const region = this.opts.templateSearchRegion
+        const threshold = this.opts.templateThreshold ?? 0.75
+        const stride = this.opts.templateStride ?? 2
+        let haystack = buf
+        let hw = screenW,
+          hh = screenH
+        if (region) {
+          haystack = await sharp(buf)
+            .extract({ left: region.x, top: region.y, width: region.w, height: region.h })
+            .removeAlpha()
+            .raw()
+            .toBuffer()
+          hw = region.w
+          hh = region.h
+        } else {
+          // Ensure raw RGB even when no region is set.
+          haystack = await sharp(buf).removeAlpha().raw().toBuffer()
+        }
+        frame = await lib.detectFrame(haystack, hw, hh, threshold, stride)
+        // If we cropped, shift bboxes back into screen-space.
+        if (region) {
+          frame = {
+            ...frame,
+            detections: frame.detections.map((d) => ({
+              ...d,
+              bbox: [d.bbox[0] + region.x, d.bbox[1] + region.y, d.bbox[2], d.bbox[3]] as [
+                number,
+                number,
+                number,
+                number,
+              ],
+            })),
+            screenshotMeta: { width: screenW, height: screenH },
+          }
+        }
+      }
+
+      const minimapPos = this.opts.minimap ? await this.opts.minimap.sample() : null
       const vitals = this.opts.reflex?.current() ?? { hp: 1, mp: 1 }
       state = buildGameState(
         frame,
