@@ -254,18 +254,35 @@ function panSoft() {
 }
 
 // Returns the editable rect for the current step (last mob crop in multi-rect),
-// plus a setter to update it.
+// as a live view: `get rect()` always reads the current value, so mouseup
+// reads the rect after resize, not the snapshot from mousedown.
 function currentEditableRect() {
   const step = STEPS[state.stepIdx]
   if (step.mode === 'rect') {
-    if (step.id === 'window')
-      return { rect: state.gameWindow, set: (r) => (state.gameWindow = r) }
-    return { rect: state.regions[step.id], set: (r) => (state.regions[step.id] = r) }
+    if (step.id === 'window') {
+      return {
+        get rect() {
+          return state.gameWindow
+        },
+        set: (r) => (state.gameWindow = r),
+      }
+    }
+    return {
+      get rect() {
+        return state.regions[step.id]
+      },
+      set: (r) => (state.regions[step.id] = r),
+    }
   }
   if (step.mode === 'multi-rect') {
     const last = state.mobCrops[state.mobCrops.length - 1]
     if (!last) return { rect: null, set: null }
-    return { rect: last.rect, set: (r) => (last.rect = r) }
+    return {
+      get rect() {
+        return last.rect
+      },
+      set: (r) => (last.rect = r),
+    }
   }
   return { rect: null, set: null }
 }
