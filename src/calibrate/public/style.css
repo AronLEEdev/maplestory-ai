@@ -67,15 +67,71 @@ main {
   color: #999;
 }
 
+#canvas-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+#zoom-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: #0e0e0e;
+  border: 1px solid #333;
+  border-radius: 4px;
+}
+#zoom-toolbar button {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+}
+#zoom-toolbar button.active {
+  background: #4a8;
+  color: #fff;
+  border-color: #4a8;
+}
+#zoom-toolbar .zoom-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: #777;
+}
 #canvas-wrap {
   background: #000;
-  overflow: auto;
-  max-height: calc(100vh - 200px);
+  overflow: hidden;
+  height: calc(100vh - 240px);
   border: 1px solid #333;
+  position: relative;
 }
 #cv {
   display: block;
   cursor: crosshair;
+  width: 100%;
+  height: 100%;
+}
+#cursor-info {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  padding: 8px;
+  margin-bottom: 10px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 3px;
+  line-height: 1.6;
+}
+#cursor-info b {
+  color: #4a8;
+  font-weight: 600;
+}
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  margin: 0 4px;
+  border: 1px solid #555;
+  border-radius: 2px;
 }
 
 #state-panel {

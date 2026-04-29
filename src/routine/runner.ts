@@ -62,7 +62,19 @@ export class RoutineRunner {
         r.kind === 'when' ? r.predicate!(state) : this.clock.now() - last >= r.everyMs!
       if (!fire) continue
       this.lastFiredAt.set(i, this.clock.now())
-      this.emit(r.action)
+      if (r.action.kind === 'attack_facing') {
+        // Expand to face-tap + attack press based on nearest enemy's screen-x.
+        const action = r.action
+        const player = state.player.screenPos
+        const nearest = state.enemies[0] // already sorted by distance in state-builder
+        if (player && nearest) {
+          const dir = nearest.pos.x < player.x ? 'left' : 'right'
+          this.emit({ kind: 'press', key: dir, holdMs: action.faceTapMs ?? 60 })
+        }
+        this.emit({ kind: 'press', key: action.key, holdMs: action.holdMs ?? 800 })
+      } else {
+        this.emit(r.action)
+      }
       if (r.kind === 'when') attacked = true
       break
     }

@@ -47,8 +47,13 @@ const DEFAULT_REFLEX = [
 
 const DEFAULT_ROTATION = [
   {
-    when: 'mobs_in_range(2000) >= 1',
-    action: { kind: 'press', key: 'ctrl', holdMs: 800 },
+    // 400 px ≈ within a screen-width of the combat anchor at 1000-px haystack
+    // scale; tight enough that the bot doesn't lock on faraway mobs and walk
+    // into a wall while ignoring the patrol.
+    when: 'mobs_in_range(400) >= 1',
+    // attack_facing taps left/right toward nearest mob before the attack press,
+    // so the bot doesn't waste cycles attacking empty air.
+    action: { kind: 'attack_facing', key: 'ctrl', holdMs: 800, faceTapMs: 60 },
     cooldown_ms: 500,
   },
 ]

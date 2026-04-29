@@ -68,6 +68,15 @@ export const Action = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('move'),   direction: z.enum(['left','right','up','down']), ms: z.number() }),
   z.object({ kind: z.literal('wait'),   ms: z.number() }),
   z.object({ kind: z.literal('abort'),  reason: z.string() }),
+  // attack_facing is a routine-level action expanded by RoutineRunner into a
+  // sequence of presses (face direction → attack key) using state.enemies.
+  // Never reaches the Actuator directly.
+  z.object({
+    kind: z.literal('attack_facing'),
+    key: z.string(),
+    holdMs: z.number().optional(),
+    faceTapMs: z.number().optional(),
+  }),
 ])
 export type Action = z.infer<typeof Action>
 

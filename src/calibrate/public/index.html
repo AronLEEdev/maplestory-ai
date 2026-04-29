@@ -17,11 +17,22 @@
         <p class="hint" id="instr-hint"></p>
       </section>
 
-      <section id="canvas-wrap">
-        <canvas id="cv"></canvas>
+      <section id="canvas-area">
+        <div id="zoom-toolbar">
+          <button id="btn-zoom-out" title="Zoom out (-)">−</button>
+          <button id="btn-zoom-in" title="Zoom in (+)">+</button>
+          <button id="btn-zoom-fit" title="Fit (0)">fit</button>
+          <button id="btn-zoom-1" title="100% (1)">1:1</button>
+          <button id="btn-hand" title="Hand tool — drag to pan">✋ pan</button>
+          <span class="zoom-hint">scroll=zoom · space/shift/middle-drag=pan · drag handles to resize</span>
+        </div>
+        <div id="canvas-wrap">
+          <canvas id="cv"></canvas>
+        </div>
       </section>
 
       <section id="state-panel">
+        <div id="cursor-info">cursor: —</div>
         <div id="state-list"></div>
       </section>
     </main>

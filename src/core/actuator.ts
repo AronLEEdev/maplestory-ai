@@ -77,6 +77,10 @@ export class Actuator {
       this.abort(action.reason)
       return
     }
+    if (action.kind === 'attack_facing') {
+      logger.warn({ action }, 'actuator: attack_facing reached actuator (should be expanded by RoutineRunner) — dropping')
+      return
+    }
     if (!(await this.isGameFocused())) {
       logger.warn(
         { action, target: this.targetPattern },

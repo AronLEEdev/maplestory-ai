@@ -14,19 +14,34 @@ const state = {
   stepIdx: 0,
   windowTitle: 'MapleStory Worlds',
   // step outputs
-  gameWindow: null, // Rect
+  gameWindow: null,
   regions: { hp: null, mp: null, minimap: null },
-  playerDotAt: null, // {x,y}
-  playerDotRgb: null, // [r,g,b]
-  bounds: null, // {topLeft, bottomRight} minimap-LOCAL
-  waypointXs: [], // minimap-LOCAL x values
-  mobCrops: [], // [{name, rect}]
+  playerDotAt: null,
+  playerDotRgb: null,
+  bounds: null,
+  waypointXs: [],
+  mobCrops: [],
   playerCrop: null,
-  // canvas state
+  // canvas/viewport state
   img: null,
-  imgScale: 1,
+  zoom: 1, // canvas-pixels per image-pixel
+  panX: 0, // image-pixel offset of viewport's top-left
+  panY: 0,
+  // colors for the cursor-pixel readout
+  cursorImgX: 0,
+  cursorImgY: 0,
+  cursorRgb: null, // [r,g,b]
+  // hidden canvas for fast pixel reads
+  pixelCanvas: null,
+  pixelCtx: null,
+  // points-mode state
   pointPhase: 0, // 0=player, 1=boundsTL, 2=boundsBR, 3+=waypoints
+  // input modifiers
+  spaceHeld: false,
+  handTool: false,
 }
+
+const HANDLE_HIT_PX = 8 // hit radius for resize handles (canvas pixels)
 
 const cv = document.getElementById('cv')
 const ctx = cv.getContext('2d')
@@ -34,91 +49,451 @@ const instrText = document.getElementById('instr-text')
 const instrHint = document.getElementById('instr-hint')
 const stepIndicator = document.getElementById('step-indicator')
 const stateList = document.getElementById('state-list')
+const cursorInfo = document.getElementById('cursor-info')
 const btnBack = document.getElementById('btn-back')
 const btnNext = document.getElementById('btn-next')
 const btnClear = document.getElementById('btn-clear')
 const btnSave = document.getElementById('btn-save')
 const btnCancel = document.getElementById('btn-cancel')
+const btnZoomIn = document.getElementById('btn-zoom-in')
+const btnZoomOut = document.getElementById('btn-zoom-out')
+const btnZoomFit = document.getElementById('btn-zoom-fit')
+const btnZoom1 = document.getElementById('btn-zoom-1')
+const btnHand = document.getElementById('btn-hand')
 
 // ── Bootstrap: load the screenshot ───────────────────────────────────────
 const img = new Image()
 img.onload = () => {
   state.img = img
-  // Fit-to-window: scale image so it fits within ~80% viewport, but never
-  // up-scale beyond 1:1.
-  const maxW = window.innerWidth - 360
-  const maxH = window.innerHeight - 280
-  const fitScale = Math.min(maxW / img.width, maxH / img.height, 1)
-  state.imgScale = fitScale
-  cv.width = img.width * fitScale
-  cv.height = img.height * fitScale
+  // Set the canvas to viewport size; image is panned/zoomed inside.
+  resizeCanvas()
+  // Build a hidden pixel-read canvas at native image resolution.
+  state.pixelCanvas = document.createElement('canvas')
+  state.pixelCanvas.width = img.width
+  state.pixelCanvas.height = img.height
+  state.pixelCtx = state.pixelCanvas.getContext('2d', { willReadFrequently: true })
+  state.pixelCtx.drawImage(img, 0, 0)
+  fitToWindow()
   redraw()
   updateUI()
 }
 img.src = '/screenshot.png'
 
-// ── Mouse handling ───────────────────────────────────────────────────────
-let drag = null // {startX, startY, currX, currY}
-cv.addEventListener('mousedown', (e) => {
-  const step = STEPS[state.stepIdx]
-  if (step.mode === 'rect' || step.mode === 'multi-rect') {
-    const { x, y } = canvasCoords(e)
-    drag = { startX: x, startY: y, currX: x, currY: y }
-  }
-})
-cv.addEventListener('mousemove', (e) => {
-  if (!drag) return
-  const { x, y } = canvasCoords(e)
-  drag.currX = x
-  drag.currY = y
+window.addEventListener('resize', () => {
+  resizeCanvas()
   redraw()
-})
-cv.addEventListener('mouseup', () => {
-  if (!drag) return
-  const rect = dragToImageRect(drag)
-  drag = null
-  if (rect.w < 4 || rect.h < 4) {
-    redraw()
-    return
-  }
-  const step = STEPS[state.stepIdx]
-  if (step.mode === 'rect') {
-    setStepRect(step.id, rect)
-  } else if (step.mode === 'multi-rect') {
-    addMultiRect(rect)
-  }
-  redraw()
-  updateUI()
 })
 
-// Single click for points-mode (Step 5).
-cv.addEventListener('click', async (e) => {
-  const step = STEPS[state.stepIdx]
-  if (step.mode !== 'points') return
-  const { x, y } = canvasCoords(e)
-  const ix = Math.round(x / state.imgScale)
-  const iy = Math.round(y / state.imgScale)
-  await registerPoint(ix, iy)
-  redraw()
-  updateUI()
-})
+function resizeCanvas() {
+  const wrap = document.getElementById('canvas-wrap')
+  // canvas fills its container; use clientWidth/Height in CSS pixels.
+  cv.width = wrap.clientWidth
+  cv.height = wrap.clientHeight
+}
+
+function fitToWindow() {
+  if (!state.img) return
+  const sx = cv.width / state.img.width
+  const sy = cv.height / state.img.height
+  state.zoom = Math.min(sx, sy)
+  state.panX = 0
+  state.panY = 0
+}
+
+// ── Coordinate transforms ────────────────────────────────────────────────
+// canvas px → image px
+function canvasToImage(cx, cy) {
+  return {
+    x: state.panX + cx / state.zoom,
+    y: state.panY + cy / state.zoom,
+  }
+}
+// image px → canvas px
+function imageToCanvas(ix, iy) {
+  return {
+    x: (ix - state.panX) * state.zoom,
+    y: (iy - state.panY) * state.zoom,
+  }
+}
 
 function canvasCoords(e) {
   const r = cv.getBoundingClientRect()
   return { x: e.clientX - r.left, y: e.clientY - r.top }
 }
 
-function dragToImageRect(d) {
-  const sx = Math.min(d.startX, d.currX)
-  const sy = Math.min(d.startY, d.currY)
-  const ex = Math.max(d.startX, d.currX)
-  const ey = Math.max(d.startY, d.currY)
-  return {
-    x: Math.round(sx / state.imgScale),
-    y: Math.round(sy / state.imgScale),
-    w: Math.round((ex - sx) / state.imgScale),
-    h: Math.round((ey - sy) / state.imgScale),
+// ── Render ───────────────────────────────────────────────────────────────
+function redraw() {
+  if (!state.img) return
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, cv.width, cv.height)
+  // Use imageSmoothingEnabled = false for crisp pixel inspection at high zoom.
+  ctx.imageSmoothingEnabled = state.zoom < 2
+  // Source rect within image; destination rect within canvas.
+  // Compute the visible portion of the image in canvas-space and draw with
+  // an explicit src/dst rect so panning works at the canvas boundaries.
+  const dstW = state.img.width * state.zoom
+  const dstH = state.img.height * state.zoom
+  const dstX = -state.panX * state.zoom
+  const dstY = -state.panY * state.zoom
+  ctx.drawImage(state.img, dstX, dstY, dstW, dstH)
+
+  // Overlays
+  drawRect(state.gameWindow, '#5af', '1 win')
+  drawRect(state.regions.hp, '#f57', '2 hp')
+  drawRect(state.regions.mp, '#5cf', '3 mp')
+  drawRect(state.regions.minimap, '#fa5', '4 mini')
+  for (const m of state.mobCrops) {
+    drawRect(m.rect, m.name === '_player' ? '#fa3' : '#7c5', m.name)
   }
+  if (state.playerCrop) drawRect(state.playerCrop, '#fa3', 'player')
+
+  if (state.playerDotAt) drawDot(state.playerDotAt.x, state.playerDotAt.y, '#fa5', 'dot')
+  if (state.bounds && state.regions.minimap) {
+    const mm = state.regions.minimap
+    if (state.bounds.topLeft) {
+      drawDot(mm.x + state.bounds.topLeft.x, mm.y + state.bounds.topLeft.y, '#5af', 'TL')
+    }
+    if (state.bounds.bottomRight) {
+      drawDot(
+        mm.x + state.bounds.bottomRight.x,
+        mm.y + state.bounds.bottomRight.y,
+        '#5af',
+        'BR',
+      )
+      drawRect(
+        {
+          x: mm.x + state.bounds.topLeft.x,
+          y: mm.y + state.bounds.topLeft.y,
+          w: state.bounds.bottomRight.x - state.bounds.topLeft.x,
+          h: state.bounds.bottomRight.y - state.bounds.topLeft.y,
+        },
+        '#5af80',
+        'bounds',
+      )
+    }
+  }
+  if (state.regions.minimap) {
+    const mm = state.regions.minimap
+    state.waypointXs.forEach((wx, i) => {
+      drawDot(mm.x + wx, mm.y + (state.bounds?.topLeft?.y ?? 0), '#7c5', `w${i + 1}`)
+    })
+  }
+
+  if (drag && drag.mode === 'new') {
+    const a = imageToCanvas(drag.startImg.x, drag.startImg.y)
+    const b = imageToCanvas(drag.currImg.x, drag.currImg.y)
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 2
+    ctx.setLineDash([4, 4])
+    ctx.strokeRect(
+      Math.min(a.x, b.x),
+      Math.min(a.y, b.y),
+      Math.abs(b.x - a.x),
+      Math.abs(b.y - a.y),
+    )
+    ctx.setLineDash([])
+  }
+
+  // Draw resize handles for the current step's editable rect.
+  const editable = currentEditableRect()
+  if (editable.rect) drawHandles(editable.rect)
+}
+
+function drawHandles(rect) {
+  const a = imageToCanvas(rect.x, rect.y)
+  const b = imageToCanvas(rect.x + rect.w, rect.y + rect.h)
+  const cxs = [a.x, (a.x + b.x) / 2, b.x]
+  const cys = [a.y, (a.y + b.y) / 2, b.y]
+  ctx.fillStyle = '#fff'
+  ctx.strokeStyle = '#000'
+  ctx.lineWidth = 1
+  for (const hx of cxs) {
+    for (const hy of cys) {
+      if (hx === cxs[1] && hy === cys[1]) continue // skip center
+      ctx.fillRect(hx - 4, hy - 4, 8, 8)
+      ctx.strokeRect(hx - 4, hy - 4, 8, 8)
+    }
+  }
+}
+
+function drawRect(rect, color, label) {
+  if (!rect) return
+  const a = imageToCanvas(rect.x, rect.y)
+  const b = imageToCanvas(rect.x + rect.w, rect.y + rect.h)
+  ctx.strokeStyle = color
+  ctx.lineWidth = 2
+  ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y)
+  ctx.fillStyle = color
+  ctx.font = '12px ui-monospace'
+  ctx.fillText(label, a.x + 4, a.y - 2)
+}
+
+function drawDot(ix, iy, color, label) {
+  const p = imageToCanvas(ix, iy)
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.font = '11px ui-monospace'
+  ctx.fillText(label, p.x + 8, p.y + 4)
+}
+
+// ── Mouse: drag-rect, points, panning, wheel-zoom ────────────────────────
+// drag: { mode: 'new'|'move'|'resize', handle?, startImg, currImg, origRect?, target? }
+// pan: { startCv, startPanX, startPanY }
+let drag = null
+let pan = null
+
+function panTriggered(e) {
+  return e.button === 1 || e.button === 2 || e.shiftKey || state.spaceHeld || state.handTool
+}
+
+// Returns the editable rect for the current step (last mob crop in multi-rect),
+// plus a setter to update it.
+function currentEditableRect() {
+  const step = STEPS[state.stepIdx]
+  if (step.mode === 'rect') {
+    if (step.id === 'window')
+      return { rect: state.gameWindow, set: (r) => (state.gameWindow = r) }
+    return { rect: state.regions[step.id], set: (r) => (state.regions[step.id] = r) }
+  }
+  if (step.mode === 'multi-rect') {
+    const last = state.mobCrops[state.mobCrops.length - 1]
+    if (!last) return { rect: null, set: null }
+    return { rect: last.rect, set: (r) => (last.rect = r) }
+  }
+  return { rect: null, set: null }
+}
+
+// Hit-test image-point against rect; returns mode + handle string.
+// Handles in canvas-pixel space so they stay grabbable regardless of zoom.
+function hitTestRect(ip, rect) {
+  if (!rect) return null
+  const r = HANDLE_HIT_PX / state.zoom
+  const x1 = rect.x,
+    y1 = rect.y,
+    x2 = rect.x + rect.w,
+    y2 = rect.y + rect.h
+  const onL = Math.abs(ip.x - x1) <= r
+  const onR = Math.abs(ip.x - x2) <= r
+  const onT = Math.abs(ip.y - y1) <= r
+  const onB = Math.abs(ip.y - y2) <= r
+  const inX = ip.x >= x1 - r && ip.x <= x2 + r
+  const inY = ip.y >= y1 - r && ip.y <= y2 + r
+  if (onL && onT && inX && inY) return { mode: 'resize', handle: 'tl' }
+  if (onR && onT && inX && inY) return { mode: 'resize', handle: 'tr' }
+  if (onL && onB && inX && inY) return { mode: 'resize', handle: 'bl' }
+  if (onR && onB && inX && inY) return { mode: 'resize', handle: 'br' }
+  if (onT && inX) return { mode: 'resize', handle: 't' }
+  if (onB && inX) return { mode: 'resize', handle: 'b' }
+  if (onL && inY) return { mode: 'resize', handle: 'l' }
+  if (onR && inY) return { mode: 'resize', handle: 'r' }
+  if (ip.x >= x1 && ip.x <= x2 && ip.y >= y1 && ip.y <= y2) return { mode: 'move' }
+  return null
+}
+
+const HANDLE_CURSORS = {
+  tl: 'nwse-resize',
+  br: 'nwse-resize',
+  tr: 'nesw-resize',
+  bl: 'nesw-resize',
+  t: 'ns-resize',
+  b: 'ns-resize',
+  l: 'ew-resize',
+  r: 'ew-resize',
+}
+
+function applyHandleDelta(orig, handle, dx, dy) {
+  let { x, y, w, h } = orig
+  if (handle.includes('l')) {
+    x += dx
+    w -= dx
+  }
+  if (handle.includes('r')) {
+    w += dx
+  }
+  if (handle.includes('t')) {
+    y += dy
+    h -= dy
+  }
+  if (handle.includes('b')) {
+    h += dy
+  }
+  // Allow flipping (negative w/h) — normalized on commit.
+  return { x, y, w, h }
+}
+
+cv.addEventListener('mousedown', (e) => {
+  // Pan triggers take precedence over rect editing.
+  if (panTriggered(e)) {
+    e.preventDefault()
+    pan = {
+      startCv: canvasCoords(e),
+      startPanX: state.panX,
+      startPanY: state.panY,
+    }
+    cv.style.cursor = 'grabbing'
+    return
+  }
+  if (e.button !== 0) return
+  const step = STEPS[state.stepIdx]
+  if (step.mode !== 'rect' && step.mode !== 'multi-rect') return
+  const c = canvasCoords(e)
+  const ip = canvasToImage(c.x, c.y)
+  const editable = currentEditableRect()
+  const hit = hitTestRect(ip, editable.rect)
+  if (hit && editable.set) {
+    drag = {
+      mode: hit.mode,
+      handle: hit.handle,
+      startImg: ip,
+      currImg: ip,
+      origRect: { ...editable.rect },
+      target: editable,
+    }
+  } else {
+    // Fresh draw: in single-rect mode this replaces the existing rect on commit.
+    drag = { mode: 'new', startImg: ip, currImg: ip }
+  }
+})
+
+cv.addEventListener('mousemove', (e) => {
+  const c = canvasCoords(e)
+  const ip = canvasToImage(c.x, c.y)
+  state.cursorImgX = Math.round(ip.x)
+  state.cursorImgY = Math.round(ip.y)
+  // Pixel-color readout — read from hidden full-res canvas.
+  if (state.pixelCtx) {
+    const ix = Math.max(0, Math.min(state.img.width - 1, state.cursorImgX))
+    const iy = Math.max(0, Math.min(state.img.height - 1, state.cursorImgY))
+    try {
+      const d = state.pixelCtx.getImageData(ix, iy, 1, 1).data
+      state.cursorRgb = [d[0], d[1], d[2]]
+    } catch {
+      state.cursorRgb = null
+    }
+  }
+  if (pan) {
+    const dx = c.x - pan.startCv.x
+    const dy = c.y - pan.startCv.y
+    state.panX = pan.startPanX - dx / state.zoom
+    state.panY = pan.startPanY - dy / state.zoom
+  } else if (drag) {
+    drag.currImg = ip
+    if (drag.mode === 'move' && drag.target) {
+      const dx = ip.x - drag.startImg.x
+      const dy = ip.y - drag.startImg.y
+      drag.target.set({
+        x: drag.origRect.x + dx,
+        y: drag.origRect.y + dy,
+        w: drag.origRect.w,
+        h: drag.origRect.h,
+      })
+    } else if (drag.mode === 'resize' && drag.target) {
+      const dx = ip.x - drag.startImg.x
+      const dy = ip.y - drag.startImg.y
+      drag.target.set(applyHandleDelta(drag.origRect, drag.handle, dx, dy))
+    }
+  } else {
+    // Hover cursor feedback.
+    if (panTriggered({ button: 0, shiftKey: e.shiftKey })) {
+      cv.style.cursor = 'grab'
+    } else {
+      const editable = currentEditableRect()
+      const hit = hitTestRect(ip, editable.rect)
+      cv.style.cursor = hit
+        ? hit.mode === 'move'
+          ? 'move'
+          : HANDLE_CURSORS[hit.handle]
+        : 'crosshair'
+    }
+  }
+  if (pan || drag) redraw()
+  updateCursorReadout()
+})
+
+cv.addEventListener('mouseup', () => {
+  if (pan) {
+    pan = null
+    cv.style.cursor = state.spaceHeld || state.handTool ? 'grab' : 'crosshair'
+    return
+  }
+  if (!drag) return
+  if (drag.mode === 'new') {
+    const sx = Math.min(drag.startImg.x, drag.currImg.x)
+    const sy = Math.min(drag.startImg.y, drag.currImg.y)
+    const ex = Math.max(drag.startImg.x, drag.currImg.x)
+    const ey = Math.max(drag.startImg.y, drag.currImg.y)
+    const rect = {
+      x: Math.round(sx),
+      y: Math.round(sy),
+      w: Math.round(ex - sx),
+      h: Math.round(ey - sy),
+    }
+    drag = null
+    if (rect.w < 4 || rect.h < 4) {
+      redraw()
+      return
+    }
+    const step = STEPS[state.stepIdx]
+    if (step.mode === 'rect') setStepRect(step.id, rect)
+    else if (step.mode === 'multi-rect') addMultiRect(rect)
+  } else if (drag.target) {
+    // Normalize after move/resize: flip negative w/h, round to integers.
+    const r = { ...drag.target.rect }
+    if (r.w < 0) {
+      r.x += r.w
+      r.w = -r.w
+    }
+    if (r.h < 0) {
+      r.y += r.h
+      r.h = -r.h
+    }
+    r.x = Math.round(r.x)
+    r.y = Math.round(r.y)
+    r.w = Math.round(r.w)
+    r.h = Math.round(r.h)
+    drag.target.set(r)
+    drag = null
+  }
+  redraw()
+  updateUI()
+})
+
+// Suppress browser context menu on right-click drag.
+cv.addEventListener('contextmenu', (e) => e.preventDefault())
+
+cv.addEventListener('click', async (e) => {
+  if (pan || drag || e.shiftKey || state.spaceHeld || state.handTool) return
+  const step = STEPS[state.stepIdx]
+  if (step.mode !== 'points') return
+  const c = canvasCoords(e)
+  const ip = canvasToImage(c.x, c.y)
+  await registerPoint(Math.round(ip.x), Math.round(ip.y))
+  redraw()
+  updateUI()
+})
+
+// Mousewheel zoom — anchor at cursor.
+cv.addEventListener(
+  'wheel',
+  (e) => {
+    e.preventDefault()
+    const c = canvasCoords(e)
+    const before = canvasToImage(c.x, c.y)
+    const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2
+    setZoom(state.zoom * factor)
+    // re-anchor: point under cursor stays the same image pixel
+    state.panX = before.x - c.x / state.zoom
+    state.panY = before.y - c.y / state.zoom
+    redraw()
+    updateCursorReadout()
+  },
+  { passive: false },
+)
+
+function setZoom(z) {
+  state.zoom = Math.max(0.05, Math.min(40, z))
 }
 
 // ── Step helpers ─────────────────────────────────────────────────────────
@@ -130,10 +505,6 @@ function setStepRect(id, rect) {
 }
 
 function addMultiRect(rect) {
-  // Step 6 — sprites. Default each to mob, but treat the FIRST rect with a
-  // specific name 'player' as the player crop. For simplicity we let the
-  // user click "set as player" via the state list. By default everything is
-  // a mob.
   const idx = state.mobCrops.length
   state.mobCrops.push({ name: `mob${idx + 1}`, rect })
 }
@@ -144,11 +515,9 @@ async function registerPoint(ix, iy) {
     alert('Step 5 needs the minimap region first. Go back to Step 4.')
     return
   }
-  // Local coords inside the minimap region.
   const lx = ix - minimap.x
   const ly = iy - minimap.y
   if (state.pointPhase === 0) {
-    // Player dot click — sample color from the server.
     state.playerDotAt = { x: ix, y: iy }
     try {
       const resp = await fetch('/sample-color', {
@@ -174,147 +543,72 @@ async function registerPoint(ix, iy) {
   }
 }
 
-// ── Render ───────────────────────────────────────────────────────────────
-function redraw() {
-  if (!state.img) return
-  ctx.clearRect(0, 0, cv.width, cv.height)
-  ctx.drawImage(state.img, 0, 0, cv.width, cv.height)
-
-  // Draw all known rectangles.
-  drawRect(state.gameWindow, '#5af', '1 win')
-  drawRect(state.regions.hp, '#f57', '2 hp')
-  drawRect(state.regions.mp, '#5cf', '3 mp')
-  drawRect(state.regions.minimap, '#fa5', '4 mini')
-
-  // Multi-rects (mobs / player).
-  for (const m of state.mobCrops) {
-    drawRect(m.rect, m.name === '_player' ? '#fa3' : '#7c5', m.name)
-  }
-  if (state.playerCrop) drawRect(state.playerCrop, '#fa3', 'player')
-
-  // Step 5 — points.
-  if (state.playerDotAt) {
-    drawDot(state.playerDotAt.x, state.playerDotAt.y, '#fa5', 'dot')
-  }
-  if (state.bounds && state.regions.minimap) {
-    const mm = state.regions.minimap
-    if (state.bounds.topLeft) {
-      drawDot(mm.x + state.bounds.topLeft.x, mm.y + state.bounds.topLeft.y, '#5af', 'TL')
-    }
-    if (state.bounds.bottomRight) {
-      drawDot(mm.x + state.bounds.bottomRight.x, mm.y + state.bounds.bottomRight.y, '#5af', 'BR')
-      drawRect(
-        {
-          x: mm.x + state.bounds.topLeft.x,
-          y: mm.y + state.bounds.topLeft.y,
-          w: state.bounds.bottomRight.x - state.bounds.topLeft.x,
-          h: state.bounds.bottomRight.y - state.bounds.topLeft.y,
-        },
-        '#5af80',
-        'bounds',
-      )
-    }
-  }
-  if (state.regions.minimap) {
-    const mm = state.regions.minimap
-    state.waypointXs.forEach((wx, i) => {
-      drawDot(mm.x + wx, mm.y + (state.bounds?.topLeft?.y ?? 0), '#7c5', `w${i + 1}`)
-    })
-  }
-
-  // Live drag rect.
-  if (drag) {
-    ctx.strokeStyle = '#fff'
-    ctx.lineWidth = 2
-    ctx.setLineDash([4, 4])
-    ctx.strokeRect(
-      Math.min(drag.startX, drag.currX),
-      Math.min(drag.startY, drag.currY),
-      Math.abs(drag.currX - drag.startX),
-      Math.abs(drag.currY - drag.startY),
-    )
-    ctx.setLineDash([])
-  }
-}
-
-function drawRect(rect, color, label) {
-  if (!rect) return
-  ctx.strokeStyle = color
-  ctx.lineWidth = 2
-  ctx.strokeRect(
-    rect.x * state.imgScale,
-    rect.y * state.imgScale,
-    rect.w * state.imgScale,
-    rect.h * state.imgScale,
-  )
-  ctx.fillStyle = color
-  ctx.font = '12px ui-monospace'
-  ctx.fillText(label, rect.x * state.imgScale + 4, rect.y * state.imgScale - 2)
-}
-
-function drawDot(ix, iy, color, label) {
-  const cx = ix * state.imgScale
-  const cy = iy * state.imgScale
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.arc(cx, cy, 5, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.fillStyle = color
-  ctx.font = '11px ui-monospace'
-  ctx.fillText(label, cx + 8, cy + 4)
-}
-
 // ── UI updates ───────────────────────────────────────────────────────────
 function updateUI() {
   const step = STEPS[state.stepIdx]
-  // step indicator
   stepIndicator.innerHTML = STEPS.map((s, i) => {
     const cls = i < state.stepIdx ? 'done' : i === state.stepIdx ? 'active' : ''
     return `<span class="step ${cls}">${s.label}</span>`
   }).join('')
 
-  // instructions
   if (step.id === 'window') {
     instrText.textContent = 'Drag a rectangle around the entire Maplestory game window.'
-    instrHint.textContent = 'Tells the bot the screen area to focus on. Re-run if you move the window.'
+    instrHint.textContent =
+      'Tip: scroll the mouse wheel to zoom. Shift-drag (or middle/right-drag) to pan.'
   } else if (step.id === 'hp') {
-    instrText.textContent = 'Drag tightly around the HP bar (the colored fill area, not the text label).'
-    instrHint.textContent = 'Used to detect HP %. Tighter = better signal.'
+    instrText.textContent =
+      'Drag tightly around the HP bar (the colored fill area, not the text label).'
+    instrHint.textContent = 'Zoom in (mousewheel) for accurate cropping. Shift-drag pans.'
   } else if (step.id === 'mp') {
     instrText.textContent = 'Drag tightly around the MP bar.'
-    instrHint.textContent = 'Same idea — bar only, no text.'
+    instrHint.textContent = 'Same idea — bar only, no text. Zoom in for accuracy.'
   } else if (step.id === 'minimap') {
     instrText.textContent = 'Drag a rectangle around the entire minimap.'
-    instrHint.textContent = 'Click should encompass the playable map area shown in the minimap.'
+    instrHint.textContent = 'Should encompass the playable map area shown in the minimap.'
   } else if (step.id === 'minimap-points') {
     if (state.pointPhase === 0) {
       instrText.textContent = 'Click the player dot on the minimap.'
-      instrHint.textContent = 'The bright dot that represents your character. Color is sampled live.'
+      instrHint.textContent = 'Zoom in first if the dot is small. Color sampled live.'
     } else if (state.pointPhase === 1) {
       instrText.textContent = 'Click the TOP-LEFT corner of the patrol area on the minimap.'
       instrHint.textContent = 'Where the platform you grind on starts.'
     } else if (state.pointPhase === 2) {
-      instrText.textContent = 'Click the BOTTOM-RIGHT corner of the patrol area on the minimap.'
+      instrText.textContent =
+        'Click the BOTTOM-RIGHT corner of the patrol area on the minimap.'
       instrHint.textContent = 'Closes the bounding box.'
     } else {
       instrText.textContent = `Click waypoint ${state.waypointXs.length + 1} (or press Next when done — need at least 2).`
-      instrHint.textContent = 'Each click adds a x-coordinate the bot will walk to.'
+      instrHint.textContent = 'Each click adds an x-coordinate the bot will walk to.'
     }
   } else if (step.id === 'mobs') {
-    instrText.textContent = 'Drag rectangles around mob sprites (and optionally one over your character).'
-    instrHint.textContent = 'Tight crops. Click "set as player" in the panel to mark a sprite as your character.'
+    instrText.textContent =
+      'Drag rectangles around mob sprites (and optionally one over your character).'
+    instrHint.textContent =
+      'Zoom in for tight crops. Click "set as player" in the panel to mark a sprite as your character.'
   }
 
-  // state panel
   stateList.innerHTML = renderStateList()
-
-  // buttons
   btnBack.disabled = state.stepIdx === 0
   btnSave.disabled = !canSave()
+  updateCursorReadout()
+}
+
+function updateCursorReadout() {
+  if (!cursorInfo) return
+  const rgb = state.cursorRgb
+  const swatch = rgb
+    ? `<span class="swatch" style="background: rgb(${rgb.join(',')})"></span>`
+    : ''
+  const rgbText = rgb ? `rgb(${rgb.join(', ')})` : '—'
+  cursorInfo.innerHTML =
+    `<b>cursor:</b> (${state.cursorImgX}, ${state.cursorImgY})<br>` +
+    `<b>color:</b> ${swatch}${rgbText}<br>` +
+    `<b>zoom:</b> ${state.zoom.toFixed(2)}x · pan (${Math.round(state.panX)}, ${Math.round(state.panY)})`
 }
 
 function renderStateList() {
-  const fmt = (r) => (r ? `[${r.x}, ${r.y}, ${r.w}x${r.h}]` : '<span class="empty">unset</span>')
+  const fmt = (r) =>
+    r ? `[${r.x}, ${r.y}, ${r.w}x${r.h}]` : '<span class="empty">unset</span>'
   let s = ''
   s += rowHTML('1 window', fmt(state.gameWindow))
   s += rowHTML('2 hp', fmt(state.regions.hp))
@@ -350,11 +644,9 @@ window.__setName = (i) => {
   }
 }
 window.__setPlayer = (i) => {
-  // Mark this crop as the player template, others as mobs.
   if (state.mobCrops[i].name === '_player') {
     state.mobCrops[i].name = `mob${i + 1}`
   } else {
-    // unmark any existing player
     state.mobCrops.forEach((m) => {
       if (m.name === '_player') m.name = `mob_${state.mobCrops.indexOf(m) + 1}`
     })
@@ -421,8 +713,77 @@ btnClear.addEventListener('click', () => {
   updateUI()
 })
 
+btnZoomIn?.addEventListener('click', () => {
+  setZoom(state.zoom * 1.5)
+  redraw()
+  updateCursorReadout()
+})
+btnZoomOut?.addEventListener('click', () => {
+  setZoom(state.zoom / 1.5)
+  redraw()
+  updateCursorReadout()
+})
+btnZoomFit?.addEventListener('click', () => {
+  fitToWindow()
+  redraw()
+  updateCursorReadout()
+})
+btnZoom1?.addEventListener('click', () => {
+  // 1:1 — center on current cursor
+  const cx = cv.width / 2
+  const cy = cv.height / 2
+  const before = canvasToImage(cx, cy)
+  setZoom(1)
+  state.panX = before.x - cx / state.zoom
+  state.panY = before.y - cy / state.zoom
+  redraw()
+  updateCursorReadout()
+})
+
+// Keyboard shortcuts: + / - to zoom, 0 to fit, 1 to 100%, space = hand tool.
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return
+  if (e.code === 'Space') {
+    if (!state.spaceHeld) {
+      state.spaceHeld = true
+      cv.style.cursor = 'grab'
+    }
+    e.preventDefault()
+    return
+  }
+  if (e.key === '+' || e.key === '=') {
+    setZoom(state.zoom * 1.5)
+    redraw()
+    updateCursorReadout()
+  } else if (e.key === '-' || e.key === '_') {
+    setZoom(state.zoom / 1.5)
+    redraw()
+    updateCursorReadout()
+  } else if (e.key === '0') {
+    fitToWindow()
+    redraw()
+    updateCursorReadout()
+  } else if (e.key === '1') {
+    setZoom(1)
+    redraw()
+    updateCursorReadout()
+  }
+})
+
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') {
+    state.spaceHeld = false
+    cv.style.cursor = state.handTool ? 'grab' : 'crosshair'
+  }
+})
+
+btnHand?.addEventListener('click', () => {
+  state.handTool = !state.handTool
+  btnHand.classList.toggle('active', state.handTool)
+  cv.style.cursor = state.handTool ? 'grab' : 'crosshair'
+})
+
 btnSave.addEventListener('click', async () => {
-  // Find the player crop, if any was marked.
   const playerEntry = state.mobCrops.find((m) => m.name === '_player')
   const mobs = state.mobCrops.filter((m) => m.name !== '_player')
 

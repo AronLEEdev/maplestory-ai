@@ -79,6 +79,35 @@ describe('RoutineRunner', () => {
     expect(got.some((a) => (a as { key: string }).key === 'shift')).toBe(true)
   })
 
+  it('attack_facing expands to face-tap then attack press', () => {
+    const c = new FakeClock(0)
+    const got: Action[] = []
+    const facingRoutine: Routine = {
+      ...routine,
+      rotation: [
+        {
+          when: 'mobs_in_range(300) >= 1',
+          action: { kind: 'attack_facing', key: 'ctrl', holdMs: 800, faceTapMs: 60 },
+          cooldown_ms: 500,
+        },
+      ],
+    }
+    const r = new RoutineRunner(facingRoutine, c, (a) => got.push(a))
+    // Mob to the LEFT of player (player at x=500, mob at x=200) → face left.
+    const left: GameState = {
+      timestamp: 0,
+      player: { pos: { x: 0, y: 0 }, screenPos: { x: 500, y: 0 }, posSource: 'detected', hp: 1, mp: 1 },
+      enemies: [{ type: 'mob_x', pos: { x: 200, y: 0 }, distancePx: 100 }],
+      flags: { runeActive: false, outOfBounds: false },
+      popup: null,
+    }
+    r.tick(left)
+    expect(got).toEqual([
+      { kind: 'press', key: 'left', holdMs: 60 },
+      { kind: 'press', key: 'ctrl', holdMs: 800 },
+    ])
+  })
+
   it('emits movement when no mob in range', () => {
     const c = new FakeClock(0)
     const got: Action[] = []
