@@ -1,6 +1,7 @@
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
+import YAML from 'yaml'
 import { logger } from '@/core/logger'
 import type { Rect } from '@/core/types'
 import { importFromRawDir } from '@/perception/sprite-import'
@@ -20,10 +21,13 @@ export interface SaveBody {
   bounds: { topLeft: { x: number; y: number }; bottomRight: { x: number; y: number } }
   /** Each entry is a minimap-LOCAL x coord. */
   waypointXs: number[]
-  /** Each entry: bbox in display-space + a sprite name. */
-  mobCrops: Array<{ name: string; rect: Rect }>
-  /** Optional player crop in display-space. */
-  playerCrop?: Rect
+  /** Each entry: bbox in display-space + a sprite name. `rect` may be null
+   *  for entries derived from an older calibration where only the cropped
+   *  PNG survives — orchestrate skips re-extraction for those and trusts
+   *  the existing sprites-raw file on disk. */
+  mobCrops: Array<{ name: string; rect: Rect | null }>
+  /** Optional player crop in display-space. Same null semantics as mobCrops. */
+  playerCrop?: Rect | null
 }
 
 export interface OrchestrateOpts {
@@ -100,11 +104,14 @@ export async function orchestrateSave(
   mkdirSync(spritesRawDir, { recursive: true })
 
   // Save mob sprite crops, pre-downscaled to runtime haystack scale.
+  // Entries with rect=null come from a re-hydrated old calibration where the
+  // PNG already exists on disk; skip extraction and trust the existing file.
   const usedNames = new Set<string>()
   for (const crop of opts.body.mobCrops) {
     let name = sanitizeName(crop.name) || `mob${usedNames.size + 1}`
     while (usedNames.has(name)) name = `${name}_${usedNames.size + 1}`
     usedNames.add(name)
+    if (!crop.rect) continue
     const dir = join(spritesRawDir, name)
     mkdirSync(dir, { recursive: true })
     await extractAndSave(opts.screenshotPng, crop.rect, runtimeScale, join(dir, 'stand.png'))
@@ -248,21 +255,87 @@ export function sidecarPathFor(routinesDir: string, map: string): string {
 }
 
 /**
- * Read the saved SaveBody for a previously-calibrated map, if any. Returns
- * null when no sidecar exists (first calibration) or on parse failure.
+ * Read the saved SaveBody for a previously-calibrated map. Tries the
+ * authoritative sidecar JSON first; if missing (older calibrations
+ * predate the sidecar), falls back to deriving as much as possible from
+ * the routine YAML + listing existing sprites-raw dirs. The fallback
+ * carries `rect: null` for sprite entries since the original crop coords
+ * weren't preserved in the YAML.
  */
 export function loadExistingCalibration(
   routinesDir: string,
   map: string,
+  spritesRawDir?: string,
 ): { resolution: [number, number]; body: SaveBody } | null {
-  const path = sidecarPathFor(routinesDir, map)
-  if (!existsSync(path)) return null
+  const sidecar = sidecarPathFor(routinesDir, map)
+  if (existsSync(sidecar)) {
+    try {
+      return JSON.parse(readFileSync(sidecar, 'utf8'))
+    } catch (err) {
+      logger.warn({ err, sidecar }, 'calibrate: sidecar parse failed — falling through')
+    }
+  }
+  // Fallback: synthesize SaveBody from the YAML.
+  const yamlPath = join(routinesDir, `${map}.yaml`)
+  if (!existsSync(yamlPath)) return null
+  let yaml: Record<string, unknown>
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    yaml = YAML.parse(readFileSync(yamlPath, 'utf8'))
   } catch (err) {
-    logger.warn({ err, path }, 'calibrate: sidecar parse failed — treating as fresh')
+    logger.warn({ err, yamlPath }, 'calibrate: yaml parse failed — no rehydrate')
     return null
   }
+  const regions = yaml.regions as { hp?: Rect; mp?: Rect; minimap?: Rect } | undefined
+  if (!regions?.hp || !regions?.mp || !regions?.minimap) return null
+  const resolution = (yaml.resolution as [number, number]) ?? [0, 0]
+  const boundsYaml = yaml.bounds as { x?: [number, number]; y?: [number, number] } | undefined
+  const bounds =
+    boundsYaml?.x && boundsYaml?.y
+      ? {
+          topLeft: { x: boundsYaml.x[0], y: boundsYaml.y[0] },
+          bottomRight: { x: boundsYaml.x[1], y: boundsYaml.y[1] },
+        }
+      : { topLeft: { x: 0, y: 0 }, bottomRight: { x: 0, y: 0 } }
+  const movement = yaml.movement as { primitives?: Array<Record<string, unknown>> } | undefined
+  const waypointXs =
+    movement?.primitives
+      ?.filter((p) => p.op === 'walk_to_x')
+      .map((p) => Number(p.x))
+      .filter((n) => Number.isFinite(n)) ?? []
+
+  // List existing sprite dirs so the user can save without re-cropping.
+  // Entries get rect=null — orchestrate then skips re-extraction and the
+  // existing PNG on disk flows through importFromRawDir untouched.
+  const rawDir = spritesRawDir ?? join('data', 'sprites-raw', map)
+  const mobCrops: Array<{ name: string; rect: Rect | null }> = []
+  let playerCropPresent = false
+  if (existsSync(rawDir)) {
+    for (const entry of readdirSync(rawDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      if (entry.name === '_player') playerCropPresent = true
+      else mobCrops.push({ name: entry.name, rect: null })
+    }
+  }
+
+  const body: SaveBody = {
+    windowTitle: (yaml.window_title as string) ?? 'MapleStory',
+    gameWindow: yaml.game_window as Rect | undefined,
+    regions: { hp: regions.hp, mp: regions.mp, minimap: regions.minimap },
+    // playerDotAt is only stored as resulting RGB in the yaml; surface a
+    // synthetic coord at minimap center so re-hydration reports SOMETHING
+    // (user can re-click in Step 5 if they want a fresh sample).
+    playerDotAt: {
+      x: Math.round(regions.minimap.x + regions.minimap.w / 2),
+      y: Math.round(regions.minimap.y + regions.minimap.h / 2),
+    },
+    bounds,
+    waypointXs,
+    mobCrops,
+    // null marks "present on disk, no rect" so canSave counts it without
+    // re-extraction. undefined means the user never cropped a player.
+    playerCrop: playerCropPresent ? null : undefined,
+  }
+  return { resolution, body }
 }
 
 function sanitizeName(s: string): string {

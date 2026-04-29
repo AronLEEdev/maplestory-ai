@@ -103,10 +103,12 @@ async function hydrateFromExisting() {
     }
     state.bounds = b.bounds ?? null
     state.waypointXs = Array.isArray(b.waypointXs) ? [...b.waypointXs] : []
+    // mobCrops may carry rect=null for entries derived from an older
+    // calibration's yaml — sprite PNG already exists on disk, no rect to
+    // draw, but they should still count toward canSave().
     state.mobCrops = Array.isArray(b.mobCrops) ? b.mobCrops.map((m) => ({ ...m })) : []
-    if (b.playerCrop) {
-      // Carry the player crop in mobCrops with the reserved name `_player`
-      // so the existing UI controls (rename / unmark / remove) work uniformly.
+    if (b.playerCrop !== undefined) {
+      // null = present on disk without rect; an object = a rect to display.
       state.mobCrops.push({ name: '_player', rect: b.playerCrop })
     }
     // Move past the points step if all sub-points already captured.
@@ -740,7 +742,11 @@ function updateCursorReadout() {
 
 function renderStateList() {
   const fmt = (r) =>
-    r ? `[${r.x}, ${r.y}, ${r.w}x${r.h}]` : '<span class="empty">unset</span>'
+    r === null
+      ? '<span style="color:#fa5">(existing — no rect)</span>'
+      : r
+        ? `[${r.x}, ${r.y}, ${r.w}x${r.h}]`
+        : '<span class="empty">unset</span>'
   let s = ''
   s += rowHTML('1 window', fmt(state.gameWindow))
   s += rowHTML('2 hp', fmt(state.regions.hp))

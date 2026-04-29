@@ -127,6 +127,11 @@ export function composeRoutine(
         match_threshold: ep.match_threshold ?? DEFAULT_PERCEPTION.match_threshold,
         stride: ep.stride ?? DEFAULT_PERCEPTION.stride,
         max_per_class: ep.max_per_class ?? DEFAULT_PERCEPTION.max_per_class,
+        // Preserve a hand-tuned (or previously-derived) combat_anchor when
+        // the new calibration data didn't recompute one. Without this,
+        // re-saving an old calibration that used yaml-fallback hydrate would
+        // wipe a working anchor and reset y to gameWindow center (the sky).
+        ...(ep.combat_anchor ? { combat_anchor: ep.combat_anchor } : {}),
       }
     }
   }
