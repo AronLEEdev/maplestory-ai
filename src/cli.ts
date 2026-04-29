@@ -22,6 +22,7 @@ import { ReplayWriter } from '@/replay/writer'
 import { join as pathJoin } from 'node:path'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { startCalibrateServer } from '@/calibrate/server'
+import { captureFrames, parseDuration as parseDurationMs } from '@/dataset/capture'
 import { exec } from 'node:child_process'
 
 const program = new Command()
@@ -400,6 +401,82 @@ Next step — let Claude Code do the analysis:
   3. Claude Code will read the frames + logs and write ${opts.out}.
   4. Review the YAML, remove \`unreviewed: true\`, then dry-run:
        npm run dev -- run ${opts.out} --mode dry-run
+`)
+  })
+
+program
+  .command('capture <map>')
+  .description('Frame-grab loop: saves PNGs to data/dataset/<map>/raw/ for YOLO labeling. Skips frames when the game is not foreground.')
+  .option('--duration <d>', 'capture window (e.g. 30s, 10m, 1h)', '10m')
+  .option('--fps <n>', 'frames per second', '2')
+  .option('--no-window-filter', 'capture every frame regardless of foreground app')
+  .option('--routine <path>', 'use this routine.yaml to crop frames to its game_window')
+  .option('--out <dir>', 'output dir (default: data/dataset/<map>/raw)')
+  .action(async (map, opts) => {
+    const durationMs = parseDurationMs(String(opts.duration))
+    const fps = Number(opts.fps)
+    if (!Number.isFinite(fps) || fps <= 0 || fps > 30) {
+      logger.error({ fps: opts.fps }, 'fps must be in (0, 30]')
+      process.exit(1)
+    }
+    const intervalMs = Math.round(1000 / fps)
+
+    let gameWindow: { x: number; y: number; w: number; h: number } | undefined
+    let windowTitle: string | undefined = 'maplestory'
+    if (opts.routine) {
+      if (!existsSync(opts.routine)) {
+        logger.error({ routine: opts.routine }, 'routine not found')
+        process.exit(1)
+      }
+      const obj = YAML.parse(readFileSync(opts.routine, 'utf8'))
+      try {
+        const routine = Routine.parse(obj)
+        gameWindow = (obj.game_window as { x: number; y: number; w: number; h: number } | undefined) ?? undefined
+        windowTitle = routine.window_title || windowTitle
+      } catch (err) {
+        logger.warn({ err }, 'capture: routine parse failed — falling back to full-display frames')
+      }
+    }
+    if (opts.windowFilter === false) windowTitle = undefined
+
+    const cap = new ScreenshotDesktopCapture()
+
+    let stopRequested = false
+    process.on('SIGINT', () => {
+      logger.info('capture: SIGINT — stopping after current frame')
+      stopRequested = true
+    })
+
+    console.log(`
+capture starting:
+  map         = ${map}
+  duration    = ${opts.duration}  (${durationMs} ms)
+  fps         = ${fps}  (every ${intervalMs} ms)
+  outDir      = ${opts.out ?? pathJoin('data', 'dataset', map, 'raw')}
+  windowFilter= ${windowTitle ?? '(off — captures everything)'}
+  cropToGame  = ${gameWindow ? 'yes (from routine.game_window)' : 'no'}
+
+Focus your game now. Press Ctrl-C to stop early.
+`)
+
+    const summary = await captureFrames({
+      map,
+      capture: cap,
+      intervalMs,
+      durationMs,
+      windowTitle,
+      gameWindow,
+      outDir: opts.out,
+      shouldStop: () => stopRequested,
+    })
+    console.log(`
+capture done:
+  saved             = ${summary.saved} frames
+  skipped (no focus) = ${summary.skippedNotFocused}
+  elapsed            = ${(summary.durationMs / 1000).toFixed(1)}s
+  output             = ${summary.outDir}/
+
+Next: open the calibrator labeler to draw player/mob boxes on these frames.
 `)
   })
 
