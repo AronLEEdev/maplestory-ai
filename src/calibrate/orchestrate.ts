@@ -125,6 +125,28 @@ export async function orchestrateSave(
   // Generate the runtime template library.
   const importSummary = await importFromRawDir({ rawDir: spritesRawDir, templatesDir })
 
+  // Pin the combat anchor (used for mobs_in_range when the player template
+  // doesn't detect at runtime) to the game-window center. Without this, the
+  // anchor falls back to display center; for users whose game window is
+  // offset within the display, the anchor lands far from the character and
+  // mobs_in_range silently filters everything out.
+  // Preference: gameWindow center (stable across the run) > playerCrop
+  // center (calibration-time only) > nothing.
+  let combatAnchor: { x_offset_from_center: number; y_offset_from_center: number } | undefined
+  if (opts.body.gameWindow) {
+    const gw = opts.body.gameWindow
+    combatAnchor = {
+      x_offset_from_center: Math.round(gw.x + gw.w / 2 - screenW / 2),
+      y_offset_from_center: Math.round(gw.y + gw.h / 2 - screenH / 2),
+    }
+  } else if (opts.body.playerCrop) {
+    const pc = opts.body.playerCrop
+    combatAnchor = {
+      x_offset_from_center: Math.round(pc.x + pc.w / 2 - screenW / 2),
+      y_offset_from_center: Math.round(pc.y + pc.h / 2 - screenH / 2),
+    }
+  }
+
   // Compose + write the routine YAML.
   const calibrationData: CalibrationData = {
     resolution: [screenW, screenH],
@@ -135,6 +157,7 @@ export async function orchestrateSave(
     bounds: { x: bx, y: by },
     waypointXs: opts.body.waypointXs,
     templateDir: templatesDir,
+    combatAnchor,
   }
   writeRoutine({ routinePath, data: calibrationData })
 

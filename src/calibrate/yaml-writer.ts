@@ -19,6 +19,9 @@ export interface CalibrationData {
   bounds: { x: [number, number]; y: [number, number] }
   waypointXs: number[]
   templateDir: string
+  /** Optional combat anchor offsets — when set, pins the screen anchor used
+   *  for `mobs_in_range` to the calibration-time character location. */
+  combatAnchor?: { x_offset_from_center: number; y_offset_from_center: number }
 }
 
 export interface WriteOpts {
@@ -136,6 +139,7 @@ export function composeRoutine(
     perception: {
       template_dir: data.templateDir, // ALWAYS overwrite — calibrator owns this path
       ...((preserved.perception as Record<string, unknown>) ?? DEFAULT_PERCEPTION),
+      ...(data.combatAnchor ? { combat_anchor: data.combatAnchor } : {}),
     },
     rotation: preserved.rotation ?? DEFAULT_ROTATION,
     movement: buildMovement(data.waypointXs),
