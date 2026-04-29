@@ -491,6 +491,7 @@ program
     const templateThreshold = routine.perception.match_threshold
     const templateStride = routine.perception.stride
     const templateSearchRegion = routine.perception.search_region
+    const templateMaxPerClass = routine.perception.max_per_class
     logger.info(
       {
         template_dir: routine.perception.template_dir,
@@ -542,6 +543,7 @@ program
       templateLibrary,
       templateThreshold,
       templateStride,
+      templateMaxPerClass,
       templateSearchRegion,
       combatAnchor: routine.perception.combat_anchor,
       bounds: routine.bounds

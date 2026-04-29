@@ -27,6 +27,9 @@ export const PerceptionConfig = z.object({
   fps: z.number().min(1).max(30),
   match_threshold: z.number().min(0).max(1).default(0.75),
   stride: z.number().int().min(1).max(8).default(2),
+  /** Max detections per class per frame after NMS. Caps a noisy template
+   *  from flooding the perception frame and freezing movement. */
+  max_per_class: z.number().int().min(1).max(64).default(8),
   search_region: Rect.optional(),
   combat_anchor: CombatAnchor.optional(),
 })

@@ -34,6 +34,7 @@ export interface OrchestratorOpts {
   templateLibrary?: TemplateLibrary
   templateThreshold?: number
   templateStride?: number
+  templateMaxPerClass?: number
   templateSearchRegion?: Rect
   combatAnchor?: CombatAnchorConfig
 }
@@ -129,6 +130,7 @@ export class Orchestrator {
       const region = this.opts.templateSearchRegion
       const threshold = this.opts.templateThreshold ?? 0.5
       const stride = this.opts.templateStride ?? 4
+      const maxPerClass = this.opts.templateMaxPerClass ?? 8
 
       // Cap haystack longest edge to keep ZNCC tractable. Mac retina captures
       // come back at backing pixels (e.g. 3024x1964 on a 14" MBP) which is
@@ -169,13 +171,26 @@ export class Orchestrator {
         'tick: sharp raw decode done',
       )
       const tDetStart = this.opts.clock.now()
-      const { frame: rawFrame, diag } = await lib.detectFrame(haystack, hw, hh, threshold, stride)
+      const { frame: rawFrame, diag } = await lib.detectFrame(haystack, hw, hh, threshold, stride, maxPerClass)
       let frame: PerceptionFrame = rawFrame
       const tDetMs = this.opts.clock.now() - tDetStart
       log(
         { detections: frame.detections.length, ms: tDetMs, diag },
         'tick: detect done',
       )
+      // Noisy-template detector: a template producing way more raw matches
+      // than its peers is almost always cropped on non-distinctive pixels and
+      // will flood `mobs_in_range` with false positives. Warn loudly so the
+      // user knows which template to recapture.
+      const noisyCutoff = maxPerClass * 4
+      for (const d of diag) {
+        if (d.matchesAboveThreshold > noisyCutoff) {
+          logger.warn(
+            { class: d.class, variant: d.variant, raw: d.matchesAboveThreshold, capPerClass: maxPerClass },
+            'perception: template produced excessive matches — likely a non-distinctive crop. Recalibrate this sprite.',
+          )
+        }
+      }
       // Map detection bboxes back into native screen coordinates.
       if (scale !== 1 || region) {
         frame = {

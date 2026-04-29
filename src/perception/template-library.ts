@@ -76,6 +76,10 @@ export class TemplateLibrary {
     hh: number,
     threshold: number,
     stride: number = 2,
+    /** Max detections to keep per class after NMS. Caps damage from a single
+     *  noisy template (e.g. one cropped on non-distinctive background pixels)
+     *  flooding the perception frame with false positives. */
+    maxPerClass: number = 8,
   ): Promise<{ frame: PerceptionFrame; diag: TemplateDiag[] }> {
     const all: TemplateMatch[] = []
     const diag: TemplateDiag[] = []
@@ -108,12 +112,25 @@ export class TemplateLibrary {
       confidence: Math.max(0, Math.min(1, m.score)),
     }))
     const suppressed = nonMaxSuppression(detections, 0.3)
+    // Top-K per class: keep only the highest-confidence matches per class so
+    // a single misbehaving template can't drown the frame in false positives.
+    const perClass = new Map<string, Detection[]>()
+    for (const d of suppressed) {
+      const arr = perClass.get(d.class) ?? []
+      arr.push(d)
+      perClass.set(d.class, arr)
+    }
+    const capped: Detection[] = []
+    for (const arr of perClass.values()) {
+      arr.sort((a, b) => b.confidence - a.confidence)
+      capped.push(...arr.slice(0, maxPerClass))
+    }
     return {
       frame: {
         timestamp: Date.now(),
-        detections: suppressed,
+        detections: capped,
         screenshotMeta: { width: hw, height: hh },
-        overallConfidence: suppressed.reduce((m, d) => Math.max(m, d.confidence), 0),
+        overallConfidence: capped.reduce((m, d) => Math.max(m, d.confidence), 0),
       },
       diag,
     }

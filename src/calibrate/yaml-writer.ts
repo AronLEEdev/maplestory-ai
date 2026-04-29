@@ -68,8 +68,11 @@ const DEFAULT_STOP_CONDITION = {
 
 const DEFAULT_PERCEPTION = {
   fps: 12,
-  match_threshold: 0.45,
+  // 0.55 filters noisier ZNCC hits from non-distinctive crops while still
+  // catching most real mobs at the 1000-px haystack scale.
+  match_threshold: 0.55,
   stride: 4,
+  max_per_class: 8,
 }
 
 function buildMovement(waypointXs: number[]) {
@@ -116,6 +119,7 @@ export function composeRoutine(
         fps: ep.fps ?? DEFAULT_PERCEPTION.fps,
         match_threshold: ep.match_threshold ?? DEFAULT_PERCEPTION.match_threshold,
         stride: ep.stride ?? DEFAULT_PERCEPTION.stride,
+        max_per_class: ep.max_per_class ?? DEFAULT_PERCEPTION.max_per_class,
       }
     }
   }
