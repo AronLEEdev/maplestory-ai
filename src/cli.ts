@@ -589,6 +589,17 @@ program
             y: routine.bounds.y as [number, number],
           }
         : undefined,
+      // Read margin from stop_condition.out_of_bounds.margin if present.
+      // Default 30: the character's minimap dot moves vertically by roughly
+      // its own height, so a 10-px margin is tight enough that a single
+      // jump or platform shift trips out_of_bounds.
+      boundsMargin: (() => {
+        const oob = routine.stop_condition?.or.find(
+          (c): c is { out_of_bounds: { margin: number } } =>
+            typeof c === 'object' && c !== null && 'out_of_bounds' in c,
+        )
+        return oob?.out_of_bounds?.margin ?? 30
+      })(),
     })
     emergency.fn = (a) => o.scheduleEmergency(a)
 

@@ -86,15 +86,28 @@ export async function orchestrateSave(
   // Sample player-dot RGB from the captured PNG at the user's click coord.
   const dotRgb = await sampleColor(opts.screenshotPng, opts.body.playerDotAt)
 
-  // Map minimap-local bounds back to a clean tuple shape.
-  const bx: [number, number] = [
+  // Map minimap-local bounds back to a clean tuple shape. Users on flat-
+  // ground maps tend to click both corners on the same horizontal line,
+  // collapsing the y range to ~1 px. Character minimap-y still varies by
+  // tens of pixels (jumps, slight platform offsets), so a degenerate range
+  // immediately trips out_of_bounds. Inflate to a minimum spread.
+  const MIN_BOUND_SPREAD = 30
+  let bx: [number, number] = [
     Math.min(opts.body.bounds.topLeft.x, opts.body.bounds.bottomRight.x),
     Math.max(opts.body.bounds.topLeft.x, opts.body.bounds.bottomRight.x),
   ]
-  const by: [number, number] = [
+  let by: [number, number] = [
     Math.min(opts.body.bounds.topLeft.y, opts.body.bounds.bottomRight.y),
     Math.max(opts.body.bounds.topLeft.y, opts.body.bounds.bottomRight.y),
   ]
+  if (bx[1] - bx[0] < MIN_BOUND_SPREAD) {
+    const c = (bx[0] + bx[1]) / 2
+    bx = [Math.round(c - MIN_BOUND_SPREAD / 2), Math.round(c + MIN_BOUND_SPREAD / 2)]
+  }
+  if (by[1] - by[0] < MIN_BOUND_SPREAD) {
+    const c = (by[0] + by[1]) / 2
+    by = [Math.round(c - MIN_BOUND_SPREAD / 2), Math.round(c + MIN_BOUND_SPREAD / 2)]
+  }
 
   // Clean any prior scaffold so a recalibration produces a clean library.
   // (The runtime templates dir gets fully rebuilt by importFromRawDir below.)
