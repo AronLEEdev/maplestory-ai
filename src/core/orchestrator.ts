@@ -96,12 +96,14 @@ export class Orchestrator {
     if (this.states) {
       state = this.states[this.stateIdx++ % this.states.length]
     } else if (this.opts.capture && this.opts.templateLibrary) {
+      const tCapStart = this.opts.clock.now()
       // captureScreen returns a PNG buffer; decode to raw RGB once here.
       const png = await this.opts.capture.captureScreen()
       const sharp = (await import('sharp')).default
       const meta = await sharp(png).metadata()
       const screenW = meta.width ?? 1920
       const screenH = meta.height ?? 1080
+      const tCapMs = this.opts.clock.now() - tCapStart
 
       // Template detection. Optionally crop to a search region first.
       const lib = this.opts.templateLibrary
@@ -122,7 +124,9 @@ export class Orchestrator {
       } else {
         haystack = await sharp(png).removeAlpha().raw().toBuffer()
       }
+      const tDetStart = this.opts.clock.now()
       let frame: PerceptionFrame = await lib.detectFrame(haystack, hw, hh, threshold, stride)
+      const tDetMs = this.opts.clock.now() - tDetStart
       if (region) {
         frame = {
           ...frame,
@@ -139,6 +143,11 @@ export class Orchestrator {
         }
       }
 
+      this.opts.bus.emit('perception.tick', {
+        captureMs: tCapMs,
+        detectMs: tDetMs,
+        detections: frame.detections.length,
+      })
       let minimapPos = null
       if (this.opts.minimap) {
         try {

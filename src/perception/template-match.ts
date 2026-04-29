@@ -66,10 +66,11 @@ function integralImages(
 }
 
 /**
- * Sliding-window ZNCC over a haystack RGB buffer for one template.
- * Returns every position where score >= threshold.
+ * Synchronous ZNCC. Use ONLY for small search regions or unit tests; over a
+ * full 1920x1080 frame this blocks the main thread for >1 sec which starves
+ * the event loop (logs, hotkeys, setTimeout). Prefer `findMatchesAsync`.
  *
- * Optimizations over naive impl:
+ * Optimizations:
  *   - Luminance only (1 channel)
  *   - Integral image gives window mean + sigma in O(1) per position
  *   - Template centered once; inner cov loop is a single pass
@@ -87,11 +88,62 @@ export function findMatches(
   threshold: number,
   stride: number = 2,
 ): TemplateMatch[] {
+  return runZncc(haystackRgb, hw, hh, templateRgb, tw, th, templateClass, threshold, stride, null)
+}
+
+/**
+ * Async ZNCC that yields to the event loop every N rows so the main thread
+ * stays responsive (logs flush, F10/F12 hotkeys deliver, setTimeout fires).
+ *
+ * Yield interval is automatic: roughly every 24 rows of stride steps.
+ */
+export async function findMatchesAsync(
+  haystackRgb: Buffer,
+  hw: number,
+  hh: number,
+  templateRgb: Buffer,
+  tw: number,
+  th: number,
+  templateClass: string,
+  threshold: number,
+  stride: number = 2,
+): Promise<TemplateMatch[]> {
+  const yieldEvery = 24 * stride
+  // Wrap the sync routine but yield every `yieldEvery` rows.
+  return runZnccAsync(
+    haystackRgb,
+    hw,
+    hh,
+    templateRgb,
+    tw,
+    th,
+    templateClass,
+    threshold,
+    stride,
+    yieldEvery,
+  )
+}
+
+function runZncc(
+  haystackRgb: Buffer,
+  hw: number,
+  hh: number,
+  templateRgb: Buffer,
+  tw: number,
+  th: number,
+  templateClass: string,
+  threshold: number,
+  stride: number,
+  yieldEveryRows: number | null,
+): TemplateMatch[] {
+  // The sync core. yieldEveryRows is unused here; runZnccAsync chunks calls
+  // by row band instead of an inline yield.
+  void yieldEveryRows
   if (tw > hw || th > hh) return []
   const hLum = rgbToLuminance(haystackRgb, hw, hh)
   const tLum = rgbToLuminance(templateRgb, tw, th)
   const { centered: tCentered, sigma: tSigma } = templateStats(tLum)
-  if (tSigma === 0) return [] // template is a flat image — meaningless to match
+  if (tSigma === 0) return []
 
   const { I, Isq } = integralImages(hLum, hw, hh)
   const W = hw + 1
@@ -102,20 +154,14 @@ export function findMatches(
     const yEnd = y + th
     for (let x = 0; x <= hw - tw; x += stride) {
       const xEnd = x + tw
-      // Window sum (and sum of squares) via integral images.
-      const sum =
-        I[yEnd * W + xEnd] - I[yEnd * W + x] - I[y * W + xEnd] + I[y * W + x]
+      const sum = I[yEnd * W + xEnd] - I[yEnd * W + x] - I[y * W + xEnd] + I[y * W + x]
       const sumSq =
         Isq[yEnd * W + xEnd] - Isq[yEnd * W + x] - Isq[y * W + xEnd] + Isq[y * W + x]
       const wMean = sum / N
-      const wVar = sumSq - sum * wMean // = sum of squared deviations
+      const wVar = sumSq - sum * wMean
       if (wVar <= 0) continue
       const wSigma = Math.sqrt(wVar)
 
-      // Single pass over template region computing cov = Σ (haystack - wMean)(template - tMean).
-      // Since tCentered already has tMean subtracted, and Σ tCentered = 0, we can simplify:
-      //   cov = Σ haystack * tCentered  - wMean * Σ tCentered
-      //       = Σ haystack * tCentered
       let cov = 0
       for (let dy = 0; dy < th; dy++) {
         const rowH = (y + dy) * hw + x
@@ -128,6 +174,65 @@ export function findMatches(
       if (score >= threshold) {
         out.push({ bbox: [x, y, tw, th], score, class: templateClass })
       }
+    }
+  }
+  return out
+}
+
+async function runZnccAsync(
+  haystackRgb: Buffer,
+  hw: number,
+  hh: number,
+  templateRgb: Buffer,
+  tw: number,
+  th: number,
+  templateClass: string,
+  threshold: number,
+  stride: number,
+  yieldEvery: number,
+): Promise<TemplateMatch[]> {
+  if (tw > hw || th > hh) return []
+  const hLum = rgbToLuminance(haystackRgb, hw, hh)
+  const tLum = rgbToLuminance(templateRgb, tw, th)
+  const { centered: tCentered, sigma: tSigma } = templateStats(tLum)
+  if (tSigma === 0) return []
+
+  const { I, Isq } = integralImages(hLum, hw, hh)
+  const W = hw + 1
+  const N = tw * th
+
+  const out: TemplateMatch[] = []
+  let rowsSinceYield = 0
+  for (let y = 0; y <= hh - th; y += stride) {
+    const yEnd = y + th
+    for (let x = 0; x <= hw - tw; x += stride) {
+      const xEnd = x + tw
+      const sum = I[yEnd * W + xEnd] - I[yEnd * W + x] - I[y * W + xEnd] + I[y * W + x]
+      const sumSq =
+        Isq[yEnd * W + xEnd] - Isq[yEnd * W + x] - Isq[y * W + xEnd] + Isq[y * W + x]
+      const wMean = sum / N
+      const wVar = sumSq - sum * wMean
+      if (wVar <= 0) continue
+      const wSigma = Math.sqrt(wVar)
+
+      let cov = 0
+      for (let dy = 0; dy < th; dy++) {
+        const rowH = (y + dy) * hw + x
+        const rowT = dy * tw
+        for (let dx = 0; dx < tw; dx++) {
+          cov += hLum[rowH + dx] * tCentered[rowT + dx]
+        }
+      }
+      const score = cov / (wSigma * tSigma)
+      if (score >= threshold) {
+        out.push({ bbox: [x, y, tw, th], score, class: templateClass })
+      }
+    }
+    rowsSinceYield++
+    if (rowsSinceYield >= yieldEvery) {
+      rowsSinceYield = 0
+      // Hand control back to the event loop so logs/hotkeys/setTimeout can run.
+      await new Promise<void>((r) => setImmediate(r))
     }
   }
   return out

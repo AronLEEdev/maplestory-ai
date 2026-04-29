@@ -22,6 +22,7 @@ import { defaultRegions } from '@/core/maplestory-defaults'
 import { ReplayWriter } from '@/replay/writer'
 import { join as pathJoin } from 'node:path'
 import { importFromRawDir } from '@/perception/sprite-import'
+import { mkdirSync, writeFileSync } from 'node:fs'
 
 const MAPLESTORY_IO_HELP = `
 For each mob on your map:
@@ -47,6 +48,74 @@ program
   .description('Validate environment')
   .action(async () => {
     process.exit(await runDoctor())
+  })
+
+program
+  .command('init <map>')
+  .description('Scaffold data/sprites-raw/<map>/<mob>/ folders for the user to fill')
+  .option('--mobs <list>', 'comma-separated mob folder names (e.g. green_snail,orange_mushroom)')
+  .option('--with-player', 'also create a _player/ folder for the player template (optional)')
+  .option('--root <dir>', 'override sprites-raw root', 'data/sprites-raw')
+  .action((map, opts) => {
+    const root = pathJoin(opts.root, map)
+    if (!opts.mobs) {
+      logger.error(
+        { example: 'npm run dev -- init henesys --mobs green_snail,orange_mushroom --with-player' },
+        'init: --mobs is required',
+      )
+      process.exit(1)
+    }
+    const mobNames = String(opts.mobs)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (mobNames.length === 0) {
+      logger.error('init: --mobs is empty after parsing')
+      process.exit(1)
+    }
+    mkdirSync(root, { recursive: true })
+    const created: string[] = []
+    for (const m of mobNames) {
+      if (m.startsWith('_')) {
+        logger.warn(
+          { name: m },
+          'init: mob names cannot start with underscore (reserved). Skipping.',
+        )
+        continue
+      }
+      const dir = pathJoin(root, m)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        pathJoin(dir, 'README.md'),
+        `# ${m}\n\nDrop sprite PNGs into this folder.\n\nRecommended files:\n- stand.png  (or idle.png) — most important; default template\n- move.png   — recommended\n- attack.png — optional\n\nSource: https://maplestory.io/api/<region>/<ver>/mob (search for "${m}")\n`,
+      )
+      created.push(dir)
+    }
+    if (opts.withPlayer) {
+      const dir = pathJoin(root, '_player')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        pathJoin(dir, 'README.md'),
+        `# _player (reserved)\n\nDrop a player snapshot here for tighter combat distance.\nWithout it the bot uses screen-center as the combat anchor.\n\nRecommended file:\n- stand.png\n`,
+      )
+      created.push(dir)
+    }
+    writeFileSync(
+      pathJoin(root, 'README.md'),
+      `# ${map} sprites\n\nFill each subfolder with PNGs from maplestory.io (or any source).\n\nThen run:\n  npm run dev -- import-sprites ${map}\n\nThis will copy + validate the PNGs into data/templates/${map}/manifest.json\nfor the runtime template library.\n`,
+    )
+    logger.info({ root, created }, 'init: scaffold ready')
+    console.log(`
+Scaffold created at ${root}/
+
+Folders created:
+${created.map((d) => `  - ${d}`).join('\n')}
+
+Next steps:
+  1. Drop PNG sprites into each <mob>/ folder (stand.png, move.png, etc.).
+  2. (Optional) Drop a player snapshot to ${root}/_player/stand.png.
+  3. Run:  npm run dev -- import-sprites ${map}
+`)
   })
 
 program
@@ -294,8 +363,21 @@ program
     // 1 Hz state summary so users see life signs during a live run.
     let lastSummaryAt = 0
     let actionsSinceSummary = 0
+    let lastPerceptionTick: { captureMs: number; detectMs: number; detections: number } | null =
+      null
     bus.on('action.executed', () => {
       actionsSinceSummary++
+    })
+    bus.on('perception.tick', (p) => {
+      lastPerceptionTick = p
+      // First tick: log immediately so user sees life signs before the 1 Hz
+      // gate kicks in.
+      if (lastSummaryAt === 0) {
+        logger.info(
+          { captureMs: p.captureMs, detectMs: p.detectMs, detections: p.detections },
+          'perception: first tick complete',
+        )
+      }
     })
     bus.on('state.built', (s: GameState) => {
       const now = clock.now()
@@ -311,6 +393,7 @@ program
           mp: Number(s.player.mp.toFixed(2)),
           rune: s.flags.runeActive,
           actionsLast1s: actionsSinceSummary,
+          perception: lastPerceptionTick,
         },
         'state',
       )

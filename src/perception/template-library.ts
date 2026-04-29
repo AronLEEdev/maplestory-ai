@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { findMatches, type TemplateMatch } from './template-match'
+import { findMatchesAsync, type TemplateMatch } from './template-match'
 import { nonMaxSuppression } from './nms'
 import type { Detection, PerceptionFrame } from '@/core/types'
 
@@ -68,7 +68,17 @@ export class TemplateLibrary {
   ): Promise<PerceptionFrame> {
     const all: TemplateMatch[] = []
     for (const t of this.templates) {
-      const matches = findMatches(haystackRgb, hw, hh, t.rgb, t.w, t.h, t.class, threshold, stride)
+      const matches = await findMatchesAsync(
+        haystackRgb,
+        hw,
+        hh,
+        t.rgb,
+        t.w,
+        t.h,
+        t.class,
+        threshold,
+        stride,
+      )
       all.push(...matches)
     }
     const detections: Detection[] = all.map((m) => ({
