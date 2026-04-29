@@ -244,8 +244,13 @@ function drawDot(ix, iy, color, label) {
 let drag = null
 let pan = null
 
-function panTriggered(e) {
-  return e.button === 1 || e.button === 2 || e.shiftKey || state.spaceHeld || state.handTool
+// Explicit pan triggers — always pan, override any rect editing.
+function panForced(e) {
+  return e.button === 1 || e.button === 2 || e.shiftKey || state.spaceHeld
+}
+// Soft pan trigger — pan only when click misses a resize handle / rect interior.
+function panSoft() {
+  return state.handTool
 }
 
 // Returns the editable rect for the current step (last mob crop in multi-rect),
@@ -324,8 +329,8 @@ function applyHandleDelta(orig, handle, dx, dy) {
 }
 
 cv.addEventListener('mousedown', (e) => {
-  // Pan triggers take precedence over rect editing.
-  if (panTriggered(e)) {
+  // Forced pan (explicit modifier) always wins — even over resize handles.
+  if (panForced(e)) {
     e.preventDefault()
     pan = {
       startCv: canvasCoords(e),
@@ -337,22 +342,38 @@ cv.addEventListener('mousedown', (e) => {
   }
   if (e.button !== 0) return
   const step = STEPS[state.stepIdx]
-  if (step.mode !== 'rect' && step.mode !== 'multi-rect') return
   const c = canvasCoords(e)
   const ip = canvasToImage(c.x, c.y)
-  const editable = currentEditableRect()
-  const hit = hitTestRect(ip, editable.rect)
-  if (hit && editable.set) {
-    drag = {
-      mode: hit.mode,
-      handle: hit.handle,
-      startImg: ip,
-      currImg: ip,
-      origRect: { ...editable.rect },
-      target: editable,
+  if (step.mode === 'rect' || step.mode === 'multi-rect') {
+    const editable = currentEditableRect()
+    const hit = hitTestRect(ip, editable.rect)
+    // Prefer resize/move when click hits a handle or rect interior — even if
+    // hand tool is on. The user grabbed a clearly-interactive affordance.
+    if (hit && editable.set) {
+      drag = {
+        mode: hit.mode,
+        handle: hit.handle,
+        startImg: ip,
+        currImg: ip,
+        origRect: { ...editable.rect },
+        target: editable,
+      }
+      return
     }
-  } else {
-    // Fresh draw: in single-rect mode this replaces the existing rect on commit.
+  }
+  // Empty canvas + hand tool → pan.
+  if (panSoft()) {
+    e.preventDefault()
+    pan = {
+      startCv: canvasCoords(e),
+      startPanX: state.panX,
+      startPanY: state.panY,
+    }
+    cv.style.cursor = 'grabbing'
+    return
+  }
+  // Otherwise: start a fresh rect draw (only valid in rect/multi-rect steps).
+  if (step.mode === 'rect' || step.mode === 'multi-rect') {
     drag = { mode: 'new', startImg: ip, currImg: ip }
   }
 })
@@ -403,17 +424,16 @@ window.addEventListener('mousemove', (e) => {
       drag.target.set(applyHandleDelta(drag.origRect, drag.handle, dx, dy))
     }
   } else if (overCanvas) {
-    // Hover cursor feedback.
-    if (panTriggered({ button: 0, shiftKey: e.shiftKey })) {
+    // Hover cursor feedback. Resize/move handles win over hand-tool grab so
+    // the cursor advertises the resize affordance the click will actually do.
+    const editable = currentEditableRect()
+    const hit = hitTestRect(ip, editable.rect)
+    if (hit) {
+      cv.style.cursor = hit.mode === 'move' ? 'move' : HANDLE_CURSORS[hit.handle]
+    } else if (e.shiftKey || state.spaceHeld || state.handTool) {
       cv.style.cursor = 'grab'
     } else {
-      const editable = currentEditableRect()
-      const hit = hitTestRect(ip, editable.rect)
-      cv.style.cursor = hit
-        ? hit.mode === 'move'
-          ? 'move'
-          : HANDLE_CURSORS[hit.handle]
-        : 'crosshair'
+      cv.style.cursor = 'crosshair'
     }
   }
   if (pan || drag) redraw()
