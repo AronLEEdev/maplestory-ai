@@ -159,7 +159,34 @@ program
           return `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" stroke="red" stroke-width="3" fill="none"/><text x="${r.x + 4}" y="${r.y - 4}" font-size="20" fill="red" font-family="sans-serif">${name}</text>`
         })
         .join('\n')
-      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}</svg>`
+
+      // Combat anchor + mobs_in_range visualization. The anchor is where the
+      // bot measures mob distance from when no `player` template detects.
+      // Show the point and the horizontal band any rotation rule of the form
+      // `mobs_in_range(N)` covers.
+      const anchorX = W / 2 + (routine.perception.combat_anchor?.x_offset_from_center ?? 0)
+      const anchorY = H / 2 + (routine.perception.combat_anchor?.y_offset_from_center ?? 0)
+      const ranges: number[] = []
+      for (const rule of routine.rotation) {
+        if (!('when' in rule)) continue
+        const m = /mobs_in_range\(\s*(\d+)\s*\)/.exec(rule.when)
+        if (m) ranges.push(Number(m[1]))
+      }
+      const rangeSvg = ranges
+        .map(
+          (px) =>
+            `<rect x="${anchorX - px}" y="${anchorY - 30}" width="${px * 2}" height="60" stroke="#0ff" stroke-width="2" fill="rgba(0,200,255,0.10)"/>` +
+            `<text x="${anchorX - px + 4}" y="${anchorY - 36}" font-size="16" fill="#0ff" font-family="sans-serif">mobs_in_range(${px})</text>`,
+        )
+        .join('\n')
+      const anchorSvg = `
+        <line x1="${anchorX - 18}" y1="${anchorY}" x2="${anchorX + 18}" y2="${anchorY}" stroke="lime" stroke-width="3"/>
+        <line x1="${anchorX}" y1="${anchorY - 18}" x2="${anchorX}" y2="${anchorY + 18}" stroke="lime" stroke-width="3"/>
+        <circle cx="${anchorX}" cy="${anchorY}" r="6" stroke="lime" stroke-width="3" fill="none"/>
+        <text x="${anchorX + 12}" y="${anchorY - 12}" font-size="18" fill="lime" font-family="sans-serif">combat anchor</text>
+      `
+
+      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}${rangeSvg}${anchorSvg}</svg>`
       await sharp(png)
         .composite([{ input: Buffer.from(overlay), top: 0, left: 0 }])
         .toFile(pathJoin(opts.out, 'full-annotated.png'))
@@ -177,6 +204,13 @@ Open in Finder / Preview:
   - region-hp.png       cropped HP bar (should look like a red bar)
   - region-mp.png       cropped MP bar (should look like a blue bar)
   - region-minimap.png  cropped minimap (should look like the minimap)
+
+  In full-annotated.png also check:
+  - lime crosshair    = combat anchor (where the bot measures mob distance from)
+                        should sit ON or very near your character
+  - cyan band         = mobs_in_range(N) rectangle (one per rotation rule)
+                        should reach the mobs you intend to attack
+  - red rectangles    = HP / MP / minimap regions; should hug each UI element
   - template-*.png      every template the runtime will match against
 
 If full.png doesn't show the game → capture is wrong (Mac Spaces issue or display perm)
