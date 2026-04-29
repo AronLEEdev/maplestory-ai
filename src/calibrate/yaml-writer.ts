@@ -62,6 +62,9 @@ const DEFAULT_ROTATION = [
     // so the bot doesn't waste cycles attacking empty air.
     action: { kind: 'attack_facing', key: 'ctrl', holdMs: 800, faceTapMs: 60 },
     cooldown_ms: 500,
+    // Require 2 consecutive ticks of mobs-in-range before pausing patrol.
+    // Filters single-frame ZNCC flickers that would otherwise freeze movement.
+    min_persist_ticks: 2,
   },
 ]
 
@@ -75,18 +78,15 @@ const DEFAULT_STOP_CONDITION = {
 
 const DEFAULT_PERCEPTION = {
   fps: 12,
-  // v1.4: native-scale templates land at 60–120 px with rich texture.
-  // 0.65 separates real matches (typically 0.7–0.9) from noise (0.4–0.6).
-  match_threshold: 0.65,
-  // Stride 8 keeps the per-tick budget under control with native templates;
-  // a 6-px mob shift is fine, NMS smooths over coarse positions.
-  stride: 8,
+  // v1.4.1: animated game sprites + anti-aliased edges + slight background
+  // shifts run real ZNCC matches at 0.55–0.75 (not the textbook 0.85+).
+  // 0.60 picks up more real mobs without re-flooding from native-scale noise.
+  match_threshold: 0.6,
+  // Stride 12 covers a 60-px template ~5× across, plenty for ZNCC peak
+  // detection, while keeping ops budget under ~1s with full-window scanning.
+  stride: 12,
   max_per_class: 8,
 }
-
-/** Default ±y px around the combat anchor that ZNCC scans. Crops the haystack
- *  to a slab around the platform so native-scale matching fits the budget. */
-const DEFAULT_ATTACK_BAND_Y = 120
 
 function buildMovement(waypointXs: number[]) {
   if (waypointXs.length < 2) {
@@ -155,10 +155,11 @@ export function composeRoutine(
       template_dir: data.templateDir, // ALWAYS overwrite — calibrator owns this path
       ...((preserved.perception as Record<string, unknown>) ?? DEFAULT_PERCEPTION),
       ...(data.combatAnchor ? { combat_anchor: data.combatAnchor } : {}),
-      // v1.4 detection knobs — written every save so the runtime can crop
-      // the haystack to gameWindow + a y-band slab around the platform.
+      // v1.4 + v1.4.1: search_region narrows ZNCC to the gameWindow.
+      // attack_band_y was a hard pre-detection slab in v1.4 — dropped in
+      // v1.4.1 because anchor errors silently hid mobs. Use
+      // combat_anchor.y_band as a post-detection enemy filter instead.
       ...(data.gameWindow ? { search_region: data.gameWindow } : {}),
-      attack_band_y: DEFAULT_ATTACK_BAND_Y,
     },
     rotation: preserved.rotation ?? DEFAULT_ROTATION,
     movement: buildMovement(data.waypointXs),

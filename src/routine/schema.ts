@@ -43,6 +43,10 @@ export const RotationRule = z.union([
     when: z.string(),
     action: Action,
     cooldown_ms: z.number().int().min(0).optional(),
+    /** Fire only after the predicate held true for this many consecutive
+     *  ticks. Default 1 (current tick). Filters single-frame ZNCC flickers
+     *  that would otherwise freeze patrol via pause_while_attacking. */
+    min_persist_ticks: z.number().int().min(1).max(10).optional(),
   }),
   z.object({
     every: z.string(),

@@ -111,7 +111,11 @@ export class TemplateLibrary {
       bbox: m.bbox,
       confidence: Math.max(0, Math.min(1, m.score)),
     }))
-    const suppressed = nonMaxSuppression(detections, 0.3)
+    // IoU 0.45: drops duplicate detections of the same mob (high overlap)
+    // while letting two side-by-side same-class mobs both survive — at IoU
+    // 0.30, two adjacent mushrooms with ~35% bbox overlap got suppressed
+    // and the bot only "saw" one of a cluster.
+    const suppressed = nonMaxSuppression(detections, 0.45)
     // Top-K per class: keep only the highest-confidence matches per class so
     // a single misbehaving template can't drown the frame in false positives.
     const perClass = new Map<string, Detection[]>()

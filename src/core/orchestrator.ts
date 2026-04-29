@@ -129,17 +129,19 @@ export class Orchestrator {
       const tCapMs = this.opts.clock.now() - tCapStart
       log({ screenW, screenH, ms: this.opts.clock.now() - tSharp }, 'tick: sharp meta done')
 
-      // Template detection.
-      // v1.4: crop the haystack to the gameWindow (search_region) and a
-      // y-band slab around the combat anchor's y. Templates and haystack
-      // both stay at native screen-backing-pixel scale, so ZNCC sees full
-      // sprite texture instead of a 30-px noise patch.
+      // Template detection. v1.4.1: detection scans the full search_region
+      // (gameWindow). The previous attack_band_y slab was a hard pre-detection
+      // visibility gate — any combat-anchor error made nearby mobs invisible
+      // to ZNCC with no log signal. The y-band effect is preserved through
+      // combat_anchor.y_band as a post-filter on enemies in state-builder.
       const lib = this.opts.templateLibrary
       const region = this.opts.templateSearchRegion
       const threshold = this.opts.templateThreshold ?? 0.5
       const stride = this.opts.templateStride ?? 4
       const maxPerClass = this.opts.templateMaxPerClass ?? 8
-      const attackBandY = this.opts.templateAttackBandY
+      if (this.opts.templateAttackBandY) {
+        log({ attackBandY: this.opts.templateAttackBandY }, 'tick: attack_band_y is deprecated and ignored — use combat_anchor.y_band')
+      }
 
       // Hard cap on haystack long edge as a safety bound for unusually large
       // game windows. Set above typical retina game-window backing pixels
@@ -152,31 +154,11 @@ export class Orchestrator {
       const longEdge = Math.max(baseW, baseH)
       const scale = longEdge > HAYSTACK_LONG_EDGE_CAP ? longEdge / HAYSTACK_LONG_EDGE_CAP : 1
 
-      // Compute the y-band crop window (in display-space coords) when
-      // attack_band_y is configured AND we have a combat-anchor y.
-      // anchorY is in full-display coords; the slab gets applied AFTER the
-      // search_region crop so we need to track region.y offsetting.
-      let bandTopGlobal = 0
-      let bandBottomGlobal = screenH
-      if (attackBandY && this.opts.combatAnchor) {
-        const anchorY = screenH / 2 + (this.opts.combatAnchor.y_offset_from_center ?? 0)
-        bandTopGlobal = Math.max(0, Math.floor(anchorY - attackBandY))
-        bandBottomGlobal = Math.min(screenH, Math.ceil(anchorY + attackBandY))
-      }
-
-      // Combine search_region + y-band into a single extract rect (display-space).
+      // Crop only to the search_region (gameWindow).
       const extractX = region?.x ?? 0
+      const extractY = region?.y ?? 0
       const extractW = region?.w ?? screenW
-      let extractY = region?.y ?? 0
-      let extractH = region?.h ?? screenH
-      if (attackBandY && this.opts.combatAnchor) {
-        const top = Math.max(extractY, bandTopGlobal)
-        const bot = Math.min(extractY + extractH, bandBottomGlobal)
-        if (bot > top) {
-          extractY = top
-          extractH = bot - top
-        }
-      }
+      const extractH = region?.h ?? screenH
 
       let hw = extractW
       let hh = extractH

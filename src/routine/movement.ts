@@ -26,10 +26,28 @@ const DEFAULT_WALK_HOLD_MS = 800
 
 export class MovementFsm {
   private idx = 0
+  /** Most recent walk direction, used as a fallback for combat-facing when
+   *  the screen-space player anchor is unreliable. Null until a walk fires. */
+  private _lastDir: 'left' | 'right' | null = null
   constructor(
     private movement: Routine['movement'],
     private _clock: Clock,
   ) {}
+
+  lastDir(): 'left' | 'right' | null {
+    return this._lastDir
+  }
+
+  /** Direction toward the next walk_to_x waypoint from the given playerX,
+   *  without firing the walk. Used by the runner's attack_facing fallback
+   *  when the bot is paused mid-combat and we still need a sensible facing. */
+  intendedDir(playerX: number): 'left' | 'right' | null {
+    const prim = this.movement.primitives[this.idx]
+    if (!prim || prim.op !== 'walk_to_x') return this._lastDir
+    const delta = prim.x - playerX
+    if (Math.abs(delta) <= TOLERANCE) return this._lastDir
+    return delta > 0 ? 'right' : 'left'
+  }
 
   tick(ctx: MovementCtx, emit: (a: Action) => void): void {
     if (ctx.attacking && this.movement.pause_while_attacking) return
@@ -42,9 +60,11 @@ export class MovementFsm {
           this.advance()
           return
         }
+        const dir: 'left' | 'right' = delta > 0 ? 'right' : 'left'
+        this._lastDir = dir
         emit({
           kind: 'press',
-          key: delta > 0 ? 'right' : 'left',
+          key: dir,
           holdMs: DEFAULT_WALK_HOLD_MS,
         })
         return

@@ -108,6 +108,50 @@ describe('RoutineRunner', () => {
     ])
   })
 
+  it('min_persist_ticks gates a one-tick flicker — fires on the second consecutive true tick', () => {
+    const c = new FakeClock(0)
+    const got: Action[] = []
+    const persistRoutine: Routine = {
+      ...routine,
+      rotation: [
+        {
+          when: 'mobs_in_range(300) >= 1',
+          action: { kind: 'press', key: 'ctrl' },
+          cooldown_ms: 0,
+          min_persist_ticks: 2,
+        },
+      ],
+    }
+    const r = new RoutineRunner(persistRoutine, c, (a) => got.push(a))
+    // Tick 1: mob present → counter goes to 1, BELOW min_persist_ticks=2 → no fire.
+    r.tick(stateWithMobs(100))
+    expect(got.filter((a) => (a as { key: string }).key === 'ctrl').length).toBe(0)
+    // Tick 2: still present → counter 2, fires.
+    r.tick(stateWithMobs(100))
+    expect(got.filter((a) => (a as { key: string }).key === 'ctrl').length).toBe(1)
+  })
+
+  it('min_persist_ticks resets on a missed predicate', () => {
+    const c = new FakeClock(0)
+    const got: Action[] = []
+    const persistRoutine: Routine = {
+      ...routine,
+      rotation: [
+        {
+          when: 'mobs_in_range(300) >= 1',
+          action: { kind: 'press', key: 'ctrl' },
+          cooldown_ms: 0,
+          min_persist_ticks: 2,
+        },
+      ],
+    }
+    const r = new RoutineRunner(persistRoutine, c, (a) => got.push(a))
+    r.tick(stateWithMobs(100)) // counter 1
+    r.tick(stateWithMobs(-1))  // counter resets to 0 (no mob)
+    r.tick(stateWithMobs(100)) // counter 1, still below 2 → no fire
+    expect(got.filter((a) => (a as { key: string }).key === 'ctrl').length).toBe(0)
+  })
+
   it('emits movement when no mob in range', () => {
     const c = new FakeClock(0)
     const got: Action[] = []
