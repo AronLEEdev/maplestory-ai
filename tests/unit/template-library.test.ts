@@ -93,7 +93,8 @@ describe('TemplateLibrary', () => {
     }
     await stamp(10, 10, 'a')
     await stamp(60, 10, 'b')
-    const frame = await lib.detectFrame(haystack, hw, hh, 0.95, 1)
+    const { frame, diag } = await lib.detectFrame(haystack, hw, hh, 0.95, 1)
+    expect(diag.length).toBe(2) // one diag entry per template
     const classes = new Set(frame.detections.map((d) => d.class))
     expect(classes.has('mob_a')).toBe(true)
     expect(classes.has('mob_b')).toBe(true)

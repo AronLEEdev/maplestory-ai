@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { findMatchesAsync, type TemplateMatch } from './template-match'
+import { findMatchesWithDiag, type TemplateMatch } from './template-match'
 import { nonMaxSuppression } from './nms'
 import type { Detection, PerceptionFrame } from '@/core/types'
 
@@ -24,6 +24,16 @@ interface LoadedTemplate {
   rgb: Buffer
   w: number
   h: number
+}
+
+export interface TemplateDiag {
+  class: string
+  variant: string
+  templateW: number
+  templateH: number
+  bestScore: number
+  bestPos: { x: number; y: number } | null
+  matchesAboveThreshold: number
 }
 
 export class TemplateLibrary {
@@ -57,7 +67,8 @@ export class TemplateLibrary {
 
   /**
    * Run every loaded template against the haystack, apply per-class NMS,
-   * and produce a PerceptionFrame.
+   * and produce a PerceptionFrame. Also returns per-template diag info so
+   * callers can see best ZNCC scores even when no match cleared threshold.
    */
   async detectFrame(
     haystackRgb: Buffer,
@@ -65,10 +76,11 @@ export class TemplateLibrary {
     hh: number,
     threshold: number,
     stride: number = 2,
-  ): Promise<PerceptionFrame> {
+  ): Promise<{ frame: PerceptionFrame; diag: TemplateDiag[] }> {
     const all: TemplateMatch[] = []
+    const diag: TemplateDiag[] = []
     for (const t of this.templates) {
-      const matches = await findMatchesAsync(
+      const r = await findMatchesWithDiag(
         haystackRgb,
         hw,
         hh,
@@ -79,19 +91,31 @@ export class TemplateLibrary {
         threshold,
         stride,
       )
-      all.push(...matches)
+      all.push(...r.matches)
+      diag.push({
+        class: t.class,
+        variant: t.variant,
+        templateW: t.w,
+        templateH: t.h,
+        bestScore: Number(r.bestScore.toFixed(3)),
+        bestPos: r.bestPos,
+        matchesAboveThreshold: r.matches.length,
+      })
     }
     const detections: Detection[] = all.map((m) => ({
       class: m.class,
       bbox: m.bbox,
-      confidence: Math.max(0, Math.min(1, m.score)), // ZNCC is in [-1,+1]; clamp
+      confidence: Math.max(0, Math.min(1, m.score)),
     }))
     const suppressed = nonMaxSuppression(detections, 0.3)
     return {
-      timestamp: Date.now(),
-      detections: suppressed,
-      screenshotMeta: { width: hw, height: hh },
-      overallConfidence: suppressed.reduce((m, d) => Math.max(m, d.confidence), 0),
+      frame: {
+        timestamp: Date.now(),
+        detections: suppressed,
+        screenshotMeta: { width: hw, height: hh },
+        overallConfidence: suppressed.reduce((m, d) => Math.max(m, d.confidence), 0),
+      },
+      diag,
     }
   }
 
@@ -100,5 +124,9 @@ export class TemplateLibrary {
   }
   classes(): string[] {
     return [...new Set(this.templates.map((t) => t.class))]
+  }
+  /** Per-template dimensions for diagnostic logging. */
+  dims(): Array<{ class: string; variant: string; w: number; h: number }> {
+    return this.templates.map((t) => ({ class: t.class, variant: t.variant, w: t.w, h: t.h }))
   }
 }

@@ -2,6 +2,7 @@ import type { Action } from './types'
 import type { InputBackend } from '@/input/index'
 import type { TypedBus } from './bus'
 import type { Clock } from './clock'
+import { logger } from './logger'
 
 export interface ActuatorOpts {
   backend: InputBackend
@@ -36,7 +37,11 @@ export class Actuator {
   async isGameFocused(): Promise<boolean> {
     if (!this.targetPattern) return true
     const title = await this.getFg()
-    if (!title) return false
+    // If the OS query failed (returned null) — common on macOS when the game
+    // is a fullscreen app on its own Space — assume focused. Better to be
+    // permissive than silently drop every keypress. Users can correlate with
+    // the test-input command to verify the game is actually receiving keys.
+    if (!title) return true
     return title.toLowerCase().includes(this.targetPattern.toLowerCase())
   }
 
@@ -72,7 +77,13 @@ export class Actuator {
       this.abort(action.reason)
       return
     }
-    if (!(await this.isGameFocused())) return
+    if (!(await this.isGameFocused())) {
+      logger.warn(
+        { action, target: this.targetPattern },
+        'actuator: dropping action — focus check failed (target window not foreground)',
+      )
+      return
+    }
 
     const start = this.clock.now()
     try {

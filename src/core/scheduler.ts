@@ -3,7 +3,7 @@ import type { Action, ActionSource, ActionPriority } from './types'
 import type { Clock } from './clock'
 
 export interface SchedulerOpts {
-  execute: (a: Action) => Promise<void>
+  execute: (a: Action, source: ActionSource, priority: ActionPriority) => Promise<void>
   clock: Clock
   perKeyCooldownMs?: number
   globalRateLimitPerSec?: number
@@ -18,7 +18,7 @@ interface Entry {
 
 export class ActionScheduler {
   private queue: Entry[] = []
-  private execute: (a: Action) => Promise<void>
+  private execute: (a: Action, source: ActionSource, priority: ActionPriority) => Promise<void>
   private clock: Clock
   private perKeyCooldownMs: number
   private globalRate: number
@@ -64,7 +64,7 @@ export class ActionScheduler {
       if (this.windowCount >= this.globalRate) break
       const entry = this.queue.shift()!
       this.windowCount++
-      await this.execute(entry.action)
+      await this.execute(entry.action, entry.source, entry.priority)
     }
   }
 }

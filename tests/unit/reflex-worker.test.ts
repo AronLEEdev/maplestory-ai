@@ -3,15 +3,14 @@ import { ReflexWorker } from '@/reflex/pixel-sampler'
 import { FakeClock } from '@/core/clock'
 
 function lowHpRegion(): Buffer {
-  return Buffer.alloc(100 * 4, 0)
+  return Buffer.alloc(100 * 3, 0)
 }
 function fullHpRegion(): Buffer {
-  const b = Buffer.alloc(100 * 4)
+  const b = Buffer.alloc(100 * 3)
   for (let i = 0; i < 100; i++) {
-    b[i * 4] = 255
-    b[i * 4 + 1] = 0
-    b[i * 4 + 2] = 0
-    b[i * 4 + 3] = 255
+    b[i * 3] = 255
+    b[i * 3 + 1] = 0
+    b[i * 3 + 2] = 0
   }
   return b
 }

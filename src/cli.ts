@@ -14,7 +14,7 @@ import { Recorder } from '@/recorder/index'
 import { analyze } from '@/analyzer/index'
 import { runDoctor } from '@/doctor'
 import { logger } from '@/core/logger'
-import { ReflexWorker, redPixelRatio, bluePixelRatio } from '@/reflex/pixel-sampler'
+import { ReflexWorker, fillRatio } from '@/reflex/pixel-sampler'
 import { MinimapSampler } from '@/perception/minimap'
 import { TemplateLibrary } from '@/perception/template-library'
 import type { Rect, Action, GameState } from '@/core/types'
@@ -48,6 +48,139 @@ program
   .description('Validate environment')
   .action(async () => {
     process.exit(await runDoctor())
+  })
+
+program
+  .command('test-input')
+  .description('Send F2 / F3 / F4 to whatever window is currently focused. In Maplestory these trigger funny faces — visible proof keypresses reach the game.')
+  .option('--keys <list>', 'comma-separated keys to send', 'F2,F3,F4')
+  .option('--gap <ms>', 'ms between presses', '1500')
+  .option('--countdown <s>', 'seconds to wait so you can focus the game', '5')
+  .action(async (opts) => {
+    const keys = String(opts.keys)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const gap = Number(opts.gap)
+    const countdown = Number(opts.countdown)
+    const backend = new ForegroundNutBackend()
+
+    logger.info({ keys, gap }, 'test-input: focus the game window NOW')
+    for (let i = countdown; i > 0; i--) {
+      console.log(`  ...${i}`)
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+    const fg = await getForegroundWindowTitle()
+    logger.info({ foregroundWindow: fg }, 'sending keys now')
+
+    for (const key of keys) {
+      const t0 = Date.now()
+      try {
+        await backend.sendKey(key, 50)
+        logger.info(
+          { key, ms: Date.now() - t0 },
+          'press dispatched (no exception from nut.js)',
+        )
+      } catch (err) {
+        logger.error({ key, err }, 'press FAILED — nut.js threw')
+      }
+      await new Promise((r) => setTimeout(r, gap))
+    }
+    logger.info('done — check the game. Did you see the faces?')
+  })
+
+program
+  .command('inspect <routinePath>')
+  .description('One-shot capture: dump the full frame + each region crop + every template so you can eyeball region coords')
+  .option('--out <dir>', 'output dir', 'inspect')
+  .action(async (routinePath, opts) => {
+    if (!existsSync(routinePath)) {
+      logger.error({ routinePath }, 'routine not found')
+      process.exit(1)
+    }
+    const obj = YAML.parse(readFileSync(routinePath, 'utf8'))
+    let routine: Routine
+    try {
+      routine = Routine.parse(obj)
+    } catch (err) {
+      logger.error({ err }, 'routine schema validation failed')
+      process.exit(1)
+    }
+    const sharp = (await import('sharp')).default
+    const fs = await import('node:fs/promises')
+
+    mkdirSync(opts.out, { recursive: true })
+
+    const cap = new ScreenshotDesktopCapture()
+    logger.info('capturing screen now — focus the game first if you want a meaningful frame')
+    await new Promise((r) => setTimeout(r, 500))
+    const png = await cap.captureScreen()
+    const meta = await sharp(png).metadata()
+    const W = meta.width ?? 0
+    const H = meta.height ?? 0
+    logger.info({ W, H, bytes: png.length }, 'capture done')
+
+    // 1. Dump full frame.
+    await fs.writeFile(pathJoin(opts.out, 'full.png'), png)
+
+    // 2. Dump each routine region.
+    for (const [name, rect] of Object.entries(routine.regions) as [string, Rect][]) {
+      if (!rect) continue
+      try {
+        await sharp(png)
+          .extract({ left: rect.x, top: rect.y, width: rect.w, height: rect.h })
+          .toFile(pathJoin(opts.out, `region-${name}.png`))
+        logger.info({ name, rect }, 'wrote region crop')
+      } catch (err) {
+        logger.warn({ name, rect, err }, 'region extract failed (out of bounds?)')
+      }
+    }
+
+    // 3. Copy each template + its dims into the inspect dir.
+    if (existsSync(routine.perception.template_dir)) {
+      const lib = await TemplateLibrary.load(routine.perception.template_dir)
+      const dims = lib.dims()
+      logger.info({ templates: dims }, 'templates loaded')
+      const tDir = routine.perception.template_dir
+      const files = (await fs.readdir(tDir)).filter((f) => f.endsWith('.png'))
+      for (const f of files) {
+        await fs.copyFile(pathJoin(tDir, f), pathJoin(opts.out, `template-${f}`))
+      }
+    }
+
+    // 4. Annotated full-frame: overlay rectangles using sharp.composite with
+    //    a tiny red 1px border SVG per region.
+    try {
+      const svgRects = (Object.entries(routine.regions) as [string, Rect][])
+        .filter(([, r]) => r != null)
+        .map(([name, r]) => {
+          return `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" stroke="red" stroke-width="3" fill="none"/><text x="${r.x + 4}" y="${r.y - 4}" font-size="20" fill="red" font-family="sans-serif">${name}</text>`
+        })
+        .join('\n')
+      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}</svg>`
+      await sharp(png)
+        .composite([{ input: Buffer.from(overlay), top: 0, left: 0 }])
+        .toFile(pathJoin(opts.out, 'full-annotated.png'))
+      logger.info('wrote full-annotated.png — open it to verify region rectangles')
+    } catch (err) {
+      logger.warn({ err }, 'annotated overlay failed')
+    }
+
+    console.log(`
+inspect output → ${opts.out}/
+
+Open in Finder / Preview:
+  - full.png            full screen capture (look at this first — does it show the GAME?)
+  - full-annotated.png  same image with routine.regions overlayed in red rectangles
+  - region-hp.png       cropped HP bar (should look like a red bar)
+  - region-mp.png       cropped MP bar (should look like a blue bar)
+  - region-minimap.png  cropped minimap (should look like the minimap)
+  - template-*.png      every template the runtime will match against
+
+If full.png doesn't show the game → capture is wrong (Mac Spaces issue or display perm)
+If region-hp.png is empty or shows wrong content → routine.regions.hp coords are wrong
+If templates look way smaller/larger than mobs in full.png → multi-scale mismatch
+`)
   })
 
 program
@@ -175,7 +308,9 @@ program
           cap.captureRegion(regions.hp),
           cap.captureRegion(regions.mp),
         ])
-        return { hp: redPixelRatio(hpBuf), mp: bluePixelRatio(mpBuf) }
+        // Color-agnostic: count "lit" pixels (luminance >= 80) regardless of
+        // bar color. Works for red HP, blue/cyan/magenta MP across MS classes.
+        return { hp: fillRatio(hpBuf), mp: fillRatio(mpBuf) }
       } catch (err) {
         logger.warn({ err }, 'recorder: vitals sample failed')
         return { hp: 1, mp: 1 }
@@ -362,11 +497,13 @@ program
 
     // 1 Hz state summary so users see life signs during a live run.
     let lastSummaryAt = 0
-    let actionsSinceSummary = 0
+    const counts = { real: 0, dryRun: 0, safeBlocked: 0 }
     let lastPerceptionTick: { captureMs: number; detectMs: number; detections: number } | null =
       null
-    bus.on('action.executed', () => {
-      actionsSinceSummary++
+    bus.on('action.executed', (e) => {
+      if (e.backend === 'dry-run') counts.dryRun++
+      else if (e.backend === 'safe-blocked') counts.safeBlocked++
+      else counts.real++
     })
     bus.on('perception.tick', (p) => {
       lastPerceptionTick = p
@@ -392,12 +529,14 @@ program
           hp: Number(s.player.hp.toFixed(2)),
           mp: Number(s.player.mp.toFixed(2)),
           rune: s.flags.runeActive,
-          actionsLast1s: actionsSinceSummary,
+          actionsLast1s: { ...counts },
           perception: lastPerceptionTick,
         },
         'state',
       )
-      actionsSinceSummary = 0
+      counts.real = 0
+      counts.dryRun = 0
+      counts.safeBlocked = 0
     })
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -408,7 +547,14 @@ program
     bus.on('action.error', (e) => replay.write('actions', e))
     bus.on('actuator.pause', (e) => replay.write('events', { kind: 'pause', ...e }))
     bus.on('actuator.resume', () => replay.write('events', { kind: 'resume' }))
-    bus.on('actuator.abort', (e) => replay.write('events', { kind: 'abort', ...e }))
+    bus.on('actuator.abort', (e) => {
+      replay.write('events', { kind: 'abort', ...e })
+      // Internal aborts (out_of_bounds, repeated_failures) must STOP the run
+      // loop. Otherwise we keep capturing + logging spam after the orchestrator
+      // gave up.
+      logger.info({ reason: e.reason }, 'orchestrator aborted — stopping run loop')
+      stop = true
+    })
     logger.info({ replayDir }, 'replay artifact dir')
 
     hk.start()

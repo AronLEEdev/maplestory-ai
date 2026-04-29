@@ -179,7 +179,19 @@ function runZncc(
   return out
 }
 
-async function runZnccAsync(
+export interface MatchDiagResult {
+  matches: TemplateMatch[]
+  bestScore: number // max ZNCC seen across the entire scan, even below threshold
+  bestPos: { x: number; y: number } | null
+  positionsScanned: number
+}
+
+/**
+ * Async ZNCC variant that ALSO reports the best score across the full scan
+ * (regardless of threshold), so callers can see whether matching is "close"
+ * or "garbage" even when 0 detections cleared the threshold.
+ */
+export async function findMatchesWithDiag(
   haystackRgb: Buffer,
   hw: number,
   hh: number,
@@ -188,24 +200,34 @@ async function runZnccAsync(
   th: number,
   templateClass: string,
   threshold: number,
-  stride: number,
-  yieldEvery: number,
-): Promise<TemplateMatch[]> {
-  if (tw > hw || th > hh) return []
+  stride: number = 2,
+): Promise<MatchDiagResult> {
+  const yieldEvery = 24 * stride
+  const empty: MatchDiagResult = {
+    matches: [],
+    bestScore: 0,
+    bestPos: null,
+    positionsScanned: 0,
+  }
+  if (tw > hw || th > hh) return empty
   const hLum = rgbToLuminance(haystackRgb, hw, hh)
   const tLum = rgbToLuminance(templateRgb, tw, th)
   const { centered: tCentered, sigma: tSigma } = templateStats(tLum)
-  if (tSigma === 0) return []
+  if (tSigma === 0) return empty
 
   const { I, Isq } = integralImages(hLum, hw, hh)
   const W = hw + 1
   const N = tw * th
 
   const out: TemplateMatch[] = []
+  let bestScore = -Infinity
+  let bestPos: { x: number; y: number } | null = null
+  let positionsScanned = 0
   let rowsSinceYield = 0
   for (let y = 0; y <= hh - th; y += stride) {
     const yEnd = y + th
     for (let x = 0; x <= hw - tw; x += stride) {
+      positionsScanned++
       const xEnd = x + tw
       const sum = I[yEnd * W + xEnd] - I[yEnd * W + x] - I[y * W + xEnd] + I[y * W + x]
       const sumSq =
@@ -224,6 +246,10 @@ async function runZnccAsync(
         }
       }
       const score = cov / (wSigma * tSigma)
+      if (score > bestScore) {
+        bestScore = score
+        bestPos = { x, y }
+      }
       if (score >= threshold) {
         out.push({ bbox: [x, y, tw, th], score, class: templateClass })
       }
@@ -231,9 +257,40 @@ async function runZnccAsync(
     rowsSinceYield++
     if (rowsSinceYield >= yieldEvery) {
       rowsSinceYield = 0
-      // Hand control back to the event loop so logs/hotkeys/setTimeout can run.
       await new Promise<void>((r) => setImmediate(r))
     }
   }
-  return out
+  return {
+    matches: out,
+    bestScore: bestScore === -Infinity ? 0 : bestScore,
+    bestPos,
+    positionsScanned,
+  }
+}
+
+async function runZnccAsync(
+  haystackRgb: Buffer,
+  hw: number,
+  hh: number,
+  templateRgb: Buffer,
+  tw: number,
+  th: number,
+  templateClass: string,
+  threshold: number,
+  stride: number,
+  yieldEvery: number,
+): Promise<TemplateMatch[]> {
+  void yieldEvery
+  const r = await findMatchesWithDiag(
+    haystackRgb,
+    hw,
+    hh,
+    templateRgb,
+    tw,
+    th,
+    templateClass,
+    threshold,
+    stride,
+  )
+  return r.matches
 }

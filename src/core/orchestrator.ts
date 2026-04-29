@@ -1,4 +1,4 @@
-import type { GameState, Action } from './types'
+import type { GameState, Action, ActionSource, ActionPriority } from './types'
 import type { TypedBus } from './bus'
 import type { Clock } from './clock'
 import type { InputBackend } from '@/input/index'
@@ -61,7 +61,7 @@ export class Orchestrator {
     })
     this.actuator.setTargetWindow(opts.routine.window_title)
     this.scheduler = new ActionScheduler({
-      execute: (a) => this.executeViaActuator(a),
+      execute: (a, source, priority) => this.executeViaActuator(a, source, priority),
       clock: opts.clock,
     })
     this.routineRunner = new RoutineRunner(opts.routine, opts.clock, (a) =>
@@ -74,16 +74,22 @@ export class Orchestrator {
     this.scheduler.submit('reflex', a, 'emergency')
   }
 
-  private async executeViaActuator(a: Action): Promise<void> {
+  private async executeViaActuator(
+    a: Action,
+    _source: ActionSource,
+    priority: ActionPriority,
+  ): Promise<void> {
     if (this.mode === 'dry-run') {
       this.opts.bus.emit('action.executed', { action: a, backend: 'dry-run', timing: 0 })
       return
     }
-    if (this.mode === 'safe') {
-      if (a.kind === 'press' || a.kind === 'combo' || a.kind === 'move') {
-        this.opts.bus.emit('action.executed', { action: a, backend: 'safe-blocked', timing: 0 })
-        return
-      }
+    // Safe mode: only emergency-priority actions (Reflex pots, abort) get
+    // forwarded to the OS. Routine + control + background priorities are
+    // logged but blocked. This lets the user verify pots work without the
+    // bot also moving / attacking.
+    if (this.mode === 'safe' && priority !== 'emergency') {
+      this.opts.bus.emit('action.executed', { action: a, backend: 'safe-blocked', timing: 0 })
+      return
     }
     await this.actuator.execute(a)
   }
@@ -121,43 +127,69 @@ export class Orchestrator {
       // Template detection. Optionally crop to a search region first.
       const lib = this.opts.templateLibrary
       const region = this.opts.templateSearchRegion
-      const threshold = this.opts.templateThreshold ?? 0.75
-      const stride = this.opts.templateStride ?? 2
+      const threshold = this.opts.templateThreshold ?? 0.5
+      const stride = this.opts.templateStride ?? 4
+
+      // Cap haystack longest edge to keep ZNCC tractable. Mac retina captures
+      // come back at backing pixels (e.g. 3024x1964 on a 14" MBP) which is
+      // ~17 MB raw — a full-screen ZNCC at 5 templates costs ~30 billion ops
+      // and freezes the main thread for minutes.
+      // Templates from maplestory.io are at native game sprite size (~60 px);
+      // downscaling the haystack to roughly the template scale also brings
+      // the rendered mob size down to template size, fixing the silent
+      // multi-scale mismatch that would otherwise return 0 detections.
+      const MAX_HAYSTACK_LONG_EDGE = 1000
+      const longEdge = Math.max(screenW, screenH)
+      const scale = longEdge > MAX_HAYSTACK_LONG_EDGE ? longEdge / MAX_HAYSTACK_LONG_EDGE : 1
+
       let haystack: Buffer
       let hw = screenW
       let hh = screenH
       const tDecode = this.opts.clock.now()
+      let pipeline = sharp(png)
       if (region) {
-        haystack = await sharp(png)
-          .extract({ left: region.x, top: region.y, width: region.w, height: region.h })
-          .removeAlpha()
-          .raw()
-          .toBuffer()
+        pipeline = pipeline.extract({
+          left: region.x,
+          top: region.y,
+          width: region.w,
+          height: region.h,
+        })
         hw = region.w
         hh = region.h
-      } else {
-        haystack = await sharp(png).removeAlpha().raw().toBuffer()
       }
+      if (scale > 1) {
+        const newW = Math.floor(hw / scale)
+        const newH = Math.floor(hh / scale)
+        pipeline = pipeline.resize({ width: newW, height: newH, fit: 'fill' })
+        hw = newW
+        hh = newH
+      }
+      haystack = await pipeline.removeAlpha().raw().toBuffer()
       log(
-        { hw, hh, bytes: haystack.length, ms: this.opts.clock.now() - tDecode },
+        { hw, hh, bytes: haystack.length, scale, ms: this.opts.clock.now() - tDecode },
         'tick: sharp raw decode done',
       )
       const tDetStart = this.opts.clock.now()
-      let frame: PerceptionFrame = await lib.detectFrame(haystack, hw, hh, threshold, stride)
+      const { frame: rawFrame, diag } = await lib.detectFrame(haystack, hw, hh, threshold, stride)
+      let frame: PerceptionFrame = rawFrame
       const tDetMs = this.opts.clock.now() - tDetStart
-      log({ detections: frame.detections.length, ms: tDetMs }, 'tick: detect done')
-      if (region) {
+      log(
+        { detections: frame.detections.length, ms: tDetMs, diag },
+        'tick: detect done',
+      )
+      // Map detection bboxes back into native screen coordinates.
+      if (scale !== 1 || region) {
         frame = {
           ...frame,
-          detections: frame.detections.map((d) => ({
-            ...d,
-            bbox: [d.bbox[0] + region.x, d.bbox[1] + region.y, d.bbox[2], d.bbox[3]] as [
-              number,
-              number,
-              number,
-              number,
-            ],
-          })),
+          detections: frame.detections.map((d) => {
+            const [x, y, w, h] = d.bbox
+            const nx = x * scale + (region?.x ?? 0)
+            const ny = y * scale + (region?.y ?? 0)
+            return {
+              ...d,
+              bbox: [nx, ny, w * scale, h * scale] as [number, number, number, number],
+            }
+          }),
           screenshotMeta: { width: screenW, height: screenH },
         }
       }

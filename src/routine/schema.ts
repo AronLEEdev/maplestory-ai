@@ -3,7 +3,7 @@ import { Action, Rect } from '@/core/types'
 
 export const ReflexEntry = z.object({
   region: z.string(),
-  metric: z.enum(['red_pixel_ratio', 'blue_pixel_ratio', 'green_pixel_ratio']),
+  metric: z.enum(['fill_ratio', 'red_pixel_ratio', 'blue_pixel_ratio', 'green_pixel_ratio']),
   below: z.number().min(0).max(1),
   cooldown_ms: z.number().int().min(0),
   action: Action,
