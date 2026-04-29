@@ -21,7 +21,11 @@ export interface CalibrationData {
   templateDir: string
   /** Optional combat anchor offsets — when set, pins the screen anchor used
    *  for `mobs_in_range` to the calibration-time character location. */
-  combatAnchor?: { x_offset_from_center: number; y_offset_from_center: number }
+  combatAnchor?: {
+    x_offset_from_center: number
+    y_offset_from_center: number
+    y_band?: number
+  }
 }
 
 export interface WriteOpts {
@@ -50,10 +54,10 @@ const DEFAULT_REFLEX = [
 
 const DEFAULT_ROTATION = [
   {
-    // 400 px ≈ within a screen-width of the combat anchor at 1000-px haystack
-    // scale; tight enough that the bot doesn't lock on faraway mobs and walk
-    // into a wall while ignoring the patrol.
-    when: 'mobs_in_range(400) >= 1',
+    // 200 native pixels horizontal — inside one character-width of attack
+    // range. Anything larger and the bot locks on mobs across the screen
+    // and never advances the patrol. Tune up to ~300 for long-reach attacks.
+    when: 'mobs_in_range(200) >= 1',
     // attack_facing taps left/right toward nearest mob before the attack press,
     // so the bot doesn't waste cycles attacking empty air.
     action: { kind: 'attack_facing', key: 'ctrl', holdMs: 800, faceTapMs: 60 },

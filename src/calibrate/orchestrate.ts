@@ -125,26 +125,32 @@ export async function orchestrateSave(
   // Generate the runtime template library.
   const importSummary = await importFromRawDir({ rawDir: spritesRawDir, templatesDir })
 
-  // Pin the combat anchor (used for mobs_in_range when the player template
-  // doesn't detect at runtime) to the game-window center. Without this, the
-  // anchor falls back to display center; for users whose game window is
-  // offset within the display, the anchor lands far from the character and
-  // mobs_in_range silently filters everything out.
-  // Preference: gameWindow center (stable across the run) > playerCrop
-  // center (calibration-time only) > nothing.
-  let combatAnchor: { x_offset_from_center: number; y_offset_from_center: number } | undefined
-  if (opts.body.gameWindow) {
-    const gw = opts.body.gameWindow
+  // Combat anchor (used for mobs_in_range when the player template doesn't
+  // detect at runtime).
+  //   X: gameWindow center — stable across the run, camera follows the
+  //      character horizontally so this tracks them well.
+  //   Y: playerCrop center if available — character is on a platform near
+  //      the bottom of the game window, NOT at vertical center (which lands
+  //      in the sky). Falls back to gameWindow center y if no playerCrop.
+  // y_band defaults to 80 px when we have playerCrop so mobs on other
+  // platforms (different y) don't count toward in-range checks.
+  let combatAnchor:
+    | {
+        x_offset_from_center: number
+        y_offset_from_center: number
+        y_band?: number
+      }
+    | undefined
+  const gw = opts.body.gameWindow
+  const pc = opts.body.playerCrop
+  if (gw || pc) {
+    const ax = gw ? gw.x + gw.w / 2 : pc!.x + pc!.w / 2
+    const ay = pc ? pc.y + pc.h / 2 : gw!.y + gw!.h / 2
     combatAnchor = {
-      x_offset_from_center: Math.round(gw.x + gw.w / 2 - screenW / 2),
-      y_offset_from_center: Math.round(gw.y + gw.h / 2 - screenH / 2),
+      x_offset_from_center: Math.round(ax - screenW / 2),
+      y_offset_from_center: Math.round(ay - screenH / 2),
     }
-  } else if (opts.body.playerCrop) {
-    const pc = opts.body.playerCrop
-    combatAnchor = {
-      x_offset_from_center: Math.round(pc.x + pc.w / 2 - screenW / 2),
-      y_offset_from_center: Math.round(pc.y + pc.h / 2 - screenH / 2),
-    }
+    if (pc) combatAnchor.y_band = 80
   }
 
   // Compose + write the routine YAML.

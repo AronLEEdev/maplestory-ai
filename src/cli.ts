@@ -172,11 +172,14 @@ program
         const m = /mobs_in_range\(\s*(\d+)\s*\)/.exec(rule.when)
         if (m) ranges.push(Number(m[1]))
       }
+      // Band height reflects combat_anchor.y_band (filters mobs by platform)
+      // when set; otherwise a 60-px sliver just to mark the anchor's row.
+      const yBand = routine.perception.combat_anchor?.y_band ?? 30
       const rangeSvg = ranges
         .map(
           (px) =>
-            `<rect x="${anchorX - px}" y="${anchorY - 30}" width="${px * 2}" height="60" stroke="#0ff" stroke-width="2" fill="rgba(0,200,255,0.10)"/>` +
-            `<text x="${anchorX - px + 4}" y="${anchorY - 36}" font-size="16" fill="#0ff" font-family="sans-serif">mobs_in_range(${px})</text>`,
+            `<rect x="${anchorX - px}" y="${anchorY - yBand}" width="${px * 2}" height="${yBand * 2}" stroke="#0ff" stroke-width="2" fill="rgba(0,200,255,0.10)"/>` +
+            `<text x="${anchorX - px + 4}" y="${anchorY - yBand - 6}" font-size="16" fill="#0ff" font-family="sans-serif">mobs_in_range(${px})</text>`,
         )
         .join('\n')
       const anchorSvg = `
