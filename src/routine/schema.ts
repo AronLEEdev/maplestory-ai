@@ -10,32 +10,16 @@ export const ReflexEntry = z.object({
 })
 
 /**
- * Optional combat anchor config used when no `player` template is detected.
- * All fields default to neutral values; tune per-map for off-center cameras.
+ * v2 perception: YOLO inference replaces ZNCC template matching.
+ * Per-map ONNX weights live at `model_path`; absent file = stub mode
+ * (runtime emits empty detections, useful before training is done).
  */
-export const CombatAnchor = z.object({
-  x_offset_from_center: z.number().default(0),
-  y_offset_from_center: z.number().default(0),
-  /** Mobs more than this many y-pixels from the anchor are flagged out of fight range. 0 disables. */
-  y_band: z.number().min(0).default(0),
-  metric: z.enum(['horizontal', 'euclidean']).default('horizontal'),
-})
-export type CombatAnchor = z.infer<typeof CombatAnchor>
-
 export const PerceptionConfig = z.object({
-  template_dir: z.string(),
-  fps: z.number().min(1).max(30),
-  match_threshold: z.number().min(0).max(1).default(0.75),
-  stride: z.number().int().min(1).max(16).default(2),
-  /** Max detections per class per frame after NMS. Caps a noisy template
-   *  from flooding the perception frame and freezing movement. */
-  max_per_class: z.number().int().min(1).max(64).default(8),
-  /** When set, ZNCC scans only `[anchor_y - attack_band_y, anchor_y + attack_band_y]`
-   *  inside the search_region. Drastically cuts ZNCC ops so native-scale templates
-   *  fit the per-tick budget. ~120 px works for single-platform maps. */
-  attack_band_y: z.number().int().min(20).max(2000).optional(),
-  search_region: Rect.optional(),
-  combat_anchor: CombatAnchor.optional(),
+  /** Path to the YOLO ONNX weights for this map. Stub mode if missing. */
+  model_path: z.string().optional(),
+  fps: z.number().min(1).max(30).default(8),
+  /** YOLO confidence threshold below which detections are dropped. */
+  confidence_threshold: z.number().min(0).max(1).default(0.5),
 })
 
 export const RotationRule = z.union([

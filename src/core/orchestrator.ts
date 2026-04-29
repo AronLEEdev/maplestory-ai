@@ -6,12 +6,11 @@ import { ActionScheduler } from './scheduler'
 import { Actuator } from './actuator'
 import { RoutineRunner } from '@/routine/runner'
 import type { Routine } from '@/routine/schema'
-import { buildGameState, type Bounds, type CombatAnchorConfig } from '@/perception/state-builder'
+import { buildGameState, type Bounds } from '@/perception/state-builder'
 import type { ReflexWorker } from '@/reflex/pixel-sampler'
 import type { CaptureProvider } from '@/capture/index'
 import type { MinimapSampler } from '@/perception/minimap'
-import type { TemplateLibrary } from '@/perception/template-library'
-import type { Rect, PerceptionFrame } from './types'
+import type { PerceptionFrame } from './types'
 import { logger } from './logger'
 
 export type RunMode = 'dry-run' | 'safe' | 'live'
@@ -31,16 +30,6 @@ export interface OrchestratorOpts {
   bounds?: Bounds
   boundsMargin?: number
   actuatorJitterMs?: number
-  templateLibrary?: TemplateLibrary
-  templateThreshold?: number
-  templateStride?: number
-  templateMaxPerClass?: number
-  templateSearchRegion?: Rect
-  /** ±y px around the combat anchor's y to crop the haystack to. With
-   *  native-scale templates this slab cropping is what keeps ZNCC under
-   *  the per-tick budget. */
-  templateAttackBandY?: number
-  combatAnchor?: CombatAnchorConfig
 }
 
 export class Orchestrator {
@@ -116,135 +105,47 @@ export class Orchestrator {
     let state: GameState | null = null
     if (this.states) {
       state = this.states[this.stateIdx++ % this.states.length]
-    } else if (this.opts.capture && this.opts.templateLibrary) {
+    } else if (this.opts.capture && this.opts.minimap) {
+      // v2 Phase 1: perception is minimap + reflex only. YOLO inference
+      // module hooks in here in phase 5b. We still capture the screen so
+      // minimap.sample() can pull its region from the latest frame, but no
+      // mob detection happens — `enemies` stays empty.
       const tCapStart = this.opts.clock.now()
-      // captureScreen returns a PNG buffer; decode to raw RGB once here.
       const png = await this.opts.capture.captureScreen()
       log({ bytes: png.length, ms: this.opts.clock.now() - tCapStart }, 'tick: captureScreen done')
-      const tSharp = this.opts.clock.now()
       const sharp = (await import('sharp')).default
       const meta = await sharp(png).metadata()
       const screenW = meta.width ?? 1920
       const screenH = meta.height ?? 1080
       const tCapMs = this.opts.clock.now() - tCapStart
-      log({ screenW, screenH, ms: this.opts.clock.now() - tSharp }, 'tick: sharp meta done')
 
-      // Template detection. v1.4.1: detection scans the full search_region
-      // (gameWindow). The previous attack_band_y slab was a hard pre-detection
-      // visibility gate — any combat-anchor error made nearby mobs invisible
-      // to ZNCC with no log signal. The y-band effect is preserved through
-      // combat_anchor.y_band as a post-filter on enemies in state-builder.
-      const lib = this.opts.templateLibrary
-      const region = this.opts.templateSearchRegion
-      const threshold = this.opts.templateThreshold ?? 0.5
-      const stride = this.opts.templateStride ?? 4
-      const maxPerClass = this.opts.templateMaxPerClass ?? 8
-      if (this.opts.templateAttackBandY) {
-        log({ attackBandY: this.opts.templateAttackBandY }, 'tick: attack_band_y is deprecated and ignored — use combat_anchor.y_band')
-      }
-
-      // Hard cap on haystack long edge as a safety bound for unusually large
-      // game windows. Set above typical retina game-window backing pixels
-      // (1918) so a Mac retina capture of a 1980-logical game window stays
-      // at native scale — any rescale here introduces a template/haystack
-      // scale mismatch and ZNCC scores collapse to noise.
-      const HAYSTACK_LONG_EDGE_CAP = 2400
-      const baseW = region?.w ?? screenW
-      const baseH = region?.h ?? screenH
-      const longEdge = Math.max(baseW, baseH)
-      const scale = longEdge > HAYSTACK_LONG_EDGE_CAP ? longEdge / HAYSTACK_LONG_EDGE_CAP : 1
-
-      // Crop only to the search_region (gameWindow).
-      const extractX = region?.x ?? 0
-      const extractY = region?.y ?? 0
-      const extractW = region?.w ?? screenW
-      const extractH = region?.h ?? screenH
-
-      let hw = extractW
-      let hh = extractH
-      const tDecode = this.opts.clock.now()
-      let pipeline = sharp(png).extract({
-        left: extractX,
-        top: extractY,
-        width: extractW,
-        height: extractH,
-      })
-      if (scale > 1) {
-        const newW = Math.floor(hw / scale)
-        const newH = Math.floor(hh / scale)
-        pipeline = pipeline.resize({ width: newW, height: newH, fit: 'fill' })
-        hw = newW
-        hh = newH
-      }
-      const haystack: Buffer = await pipeline.removeAlpha().raw().toBuffer()
-      log(
-        { hw, hh, bytes: haystack.length, scale, extractX, extractY, ms: this.opts.clock.now() - tDecode },
-        'tick: sharp raw decode done',
-      )
-      const tDetStart = this.opts.clock.now()
-      const { frame: rawFrame, diag } = await lib.detectFrame(haystack, hw, hh, threshold, stride, maxPerClass)
-      let frame: PerceptionFrame = rawFrame
-      const tDetMs = this.opts.clock.now() - tDetStart
-      log(
-        { detections: frame.detections.length, ms: tDetMs, diag },
-        'tick: detect done',
-      )
-      // Noisy-template detector: a template producing way more raw matches
-      // than its peers is almost always cropped on non-distinctive pixels and
-      // will flood `mobs_in_range` with false positives. Warn loudly so the
-      // user knows which template to recapture.
-      const noisyCutoff = maxPerClass * 4
-      for (const d of diag) {
-        if (d.matchesAboveThreshold > noisyCutoff) {
-          logger.warn(
-            { class: d.class, variant: d.variant, raw: d.matchesAboveThreshold, capPerClass: maxPerClass },
-            'perception: template produced excessive matches — likely a non-distinctive crop. Recalibrate this sprite.',
-          )
-        }
-      }
-      // Map detection bboxes back into native screen coordinates.
-      // The extract uses (extractX, extractY) as origin and scale is applied
-      // uniformly, so reverse both transforms here.
-      frame = {
-        ...frame,
-        detections: frame.detections.map((d) => {
-          const [x, y, w, h] = d.bbox
-          const nx = x * scale + extractX
-          const ny = y * scale + extractY
-          return {
-            ...d,
-            bbox: [nx, ny, w * scale, h * scale] as [number, number, number, number],
-          }
-        }),
+      const emptyFrame: PerceptionFrame = {
+        timestamp: Date.now(),
+        detections: [],
         screenshotMeta: { width: screenW, height: screenH },
+        overallConfidence: 0,
       }
-
       this.opts.bus.emit('perception.tick', {
         captureMs: tCapMs,
-        detectMs: tDetMs,
-        detections: frame.detections.length,
+        detectMs: 0,
+        detections: 0,
       })
+
       let minimapPos = null
-      if (this.opts.minimap) {
-        const t0 = this.opts.clock.now()
-        try {
-          minimapPos = await this.opts.minimap.sample()
-          log(
-            { minimapPos, ms: this.opts.clock.now() - t0 },
-            'tick: minimap sample done',
-          )
-        } catch (err) {
-          logger.warn({ err }, 'minimap sample threw')
-        }
+      const t0 = this.opts.clock.now()
+      try {
+        minimapPos = await this.opts.minimap.sample()
+        log({ minimapPos, ms: this.opts.clock.now() - t0 }, 'tick: minimap sample done')
+      } catch (err) {
+        logger.warn({ err }, 'minimap sample threw')
       }
       const vitals = this.opts.reflex?.current() ?? { hp: 1, mp: 1 }
       state = buildGameState(
-        frame,
+        emptyFrame,
         vitals,
         minimapPos,
         this.opts.bounds ?? null,
         this.opts.boundsMargin ?? 10,
-        this.opts.combatAnchor ?? {},
       )
       if (state.flags.outOfBounds) {
         logger.warn(

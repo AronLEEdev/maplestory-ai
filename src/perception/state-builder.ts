@@ -21,14 +21,13 @@ export interface Bounds {
   y: [number, number]
 }
 
+/** v1.x ZNCC-anchor config retained as an internal type only — not part of
+ *  the routine schema in v2. Phase 6 rewrites state-builder to consume YOLO
+ *  detections directly and drops this entirely. */
 export interface CombatAnchorConfig {
-  /** Pixels to add to screenW/2 for the X axis. Negative shifts left. */
   x_offset_from_center?: number
-  /** Pixels to add to screenH/2 for the Y axis. Negative shifts up. */
   y_offset_from_center?: number
-  /** Mobs more than this many y-pixels from the anchor are considered out of fight range (different platform). 0 / undefined = disabled. */
   y_band?: number
-  /** Distance metric for `mobs_in_range(...)`. Default 'horizontal' — matches 2D side-scrolling combat. */
   metric?: 'horizontal' | 'euclidean'
 }
 
@@ -63,6 +62,11 @@ function outOfBounds(p: Vec2 | null, b: Bounds | null, margin: number): boolean 
  *
  * Movement/bounds always uses minimapPos. The minimap is the canonical
  * spatial coordinate system; screenPos is for combat range only.
+ */
+/**
+ * v2 phase 1: combatAnchorCfg defaults to empty (screen-center fallback)
+ * since the routine schema no longer carries it. Phase 6 rewrites this whole
+ * function for the dual-channel BotState shape.
  */
 export function buildGameState(
   frame: PerceptionFrame,

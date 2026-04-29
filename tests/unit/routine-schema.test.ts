@@ -15,10 +15,9 @@ reflex:
   - { region: hp, metric: red_pixel_ratio, below: 0.30, cooldown_ms: 800,
       action: { kind: press, key: page_up } }
 perception:
-  template_dir: data/templates/x
-  fps: 12
-  match_threshold: 0.75
-  stride: 2
+  model_path: data/models/x.onnx
+  fps: 8
+  confidence_threshold: 0.5
 rotation:
   - { when: 'mobs_in_range(300) >= 1', action: { kind: press, key: ctrl }, cooldown_ms: 500 }
   - { every: 30s, action: { kind: press, key: shift } }
@@ -54,26 +53,15 @@ describe('Routine schema', () => {
     expect(() => Routine.parse(obj)).toThrow()
   })
 
-  it('accepts optional combat_anchor block', () => {
+  it('accepts perception with no model_path (stub mode)', () => {
     const obj = YAML.parse(valid)
-    obj.perception.combat_anchor = {
-      x_offset_from_center: -50,
-      y_offset_from_center: 0,
-      y_band: 100,
-      metric: 'horizontal',
-    }
+    delete obj.perception.model_path
     expect(() => Routine.parse(obj)).not.toThrow()
   })
 
-  it('rejects unknown combat_anchor.metric', () => {
+  it('rejects negative confidence_threshold', () => {
     const obj = YAML.parse(valid)
-    obj.perception.combat_anchor = { metric: 'manhattan' }
-    expect(() => Routine.parse(obj)).toThrow()
-  })
-
-  it('rejects perception block missing template_dir', () => {
-    const obj = YAML.parse(valid)
-    delete obj.perception.template_dir
+    obj.perception.confidence_threshold = -0.1
     expect(() => Routine.parse(obj)).toThrow()
   })
 })

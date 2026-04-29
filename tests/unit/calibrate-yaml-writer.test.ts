@@ -18,7 +18,7 @@ const baseData: CalibrationData = {
   minimapPlayerColor: { rgb: [255, 255, 136], tolerance: 12 },
   bounds: { x: [10, 280], y: [200, 350] },
   waypointXs: [30, 250],
-  templateDir: 'data/templates/henesys',
+  modelPath: 'data/models/henesys.onnx',
 }
 
 beforeEach(() => {
@@ -77,9 +77,8 @@ describe('composeRoutine', () => {
         },
       ],
       perception: {
-        match_threshold: 0.55, // user tuned
-        fps: 8,
-        stride: 6,
+        confidence_threshold: 0.55, // user tuned
+        fps: 6,
       },
       stop_condition: {
         or: [{ duration: '30m' }],
@@ -90,26 +89,26 @@ describe('composeRoutine', () => {
     expect(r.rotation).toEqual(existing.rotation)
     expect(r.stop_condition).toEqual(existing.stop_condition)
     expect(
-      (r.perception as Record<string, unknown>).match_threshold,
+      (r.perception as Record<string, unknown>).confidence_threshold,
     ).toBe(0.55)
-    expect((r.perception as Record<string, unknown>).fps).toBe(8)
+    expect((r.perception as Record<string, unknown>).fps).toBe(6)
   })
 
-  it('always overwrites perception.template_dir even when preserving behaviour', () => {
+  it('always overwrites perception.model_path even when preserving behaviour', () => {
     const existing = {
       perception: {
-        template_dir: 'data/templates/old',
-        match_threshold: 0.55,
+        model_path: 'data/models/old.onnx',
+        confidence_threshold: 0.55,
       },
     }
     const r = composeRoutine(
-      { ...baseData, templateDir: 'data/templates/henesys-new' },
+      { ...baseData, modelPath: 'data/models/henesys.onnx' },
       existing,
       true,
     )
     expect(
-      (r.perception as Record<string, unknown>).template_dir,
-    ).toBe('data/templates/henesys-new')
+      (r.perception as Record<string, unknown>).model_path,
+    ).toBe('data/models/henesys.onnx')
   })
 
   it('overwrites everything when preserveBehaviour=false', () => {

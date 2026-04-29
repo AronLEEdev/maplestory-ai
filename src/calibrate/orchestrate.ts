@@ -1,10 +1,9 @@
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import YAML from 'yaml'
 import { logger } from '@/core/logger'
 import type { Rect } from '@/core/types'
-import { importFromRawDir } from '@/perception/sprite-import'
 import { writeRoutine, type CalibrationData } from './yaml-writer'
 
 /**
@@ -78,9 +77,6 @@ export async function orchestrateSave(
     throw new Error('orchestrateSave: screenshot has no dimensions')
   }
 
-  // v1.4 templates land at native size. The orchestrator crops the haystack
-  // to the game-window rect so templates and haystack share scale.
-  const runtimeScale = 1
 
   // Sample player-dot RGB from the captured PNG at the user's click coord.
   const dotRgb = await sampleColor(opts.screenshotPng, opts.body.playerDotAt)
@@ -108,79 +104,19 @@ export async function orchestrateSave(
     by = [Math.round(c - MIN_BOUND_SPREAD / 2), Math.round(c + MIN_BOUND_SPREAD / 2)]
   }
 
-  // Clean any prior scaffold so a recalibration produces a clean library.
-  // (The runtime templates dir gets fully rebuilt by importFromRawDir below.)
-  if (existsSync(templatesDir)) {
-    rmSync(templatesDir, { recursive: true, force: true })
-  }
-  mkdirSync(spritesRawDir, { recursive: true })
-
-  // Save mob sprite crops at native size. Entries with rect=null come from a
-  // re-hydrated old calibration where the PNG already exists on disk; skip
-  // extraction and trust the existing file.
+  // v2.0: no sprite extraction. The dataset (frame captures + labels) lives
+  // under data/dataset/<map>/ and is collected by the `capture` command +
+  // canvas labeler, then fed to the YOLO training script. The routine YAML
+  // points at the trained model path (data/models/<map>.onnx).
   const warnings: string[] = []
-  const TEMPLATE_MIN = 40
-  const TEMPLATE_MAX = 250
-  const usedNames = new Set<string>()
-  for (const crop of opts.body.mobCrops) {
-    let name = sanitizeName(crop.name) || `mob${usedNames.size + 1}`
-    while (usedNames.has(name)) name = `${name}_${usedNames.size + 1}`
-    usedNames.add(name)
-    if (!crop.rect) continue
-    const dir = join(spritesRawDir, name)
-    mkdirSync(dir, { recursive: true })
-    const { w, h } = await extractAndSave(opts.screenshotPng, crop.rect, join(dir, 'stand.png'))
-    if (w < TEMPLATE_MIN || h < TEMPLATE_MIN) {
-      warnings.push(`${name}: ${w}×${h} is small — ZNCC may struggle. Recrop tighter or zoom in first.`)
-    } else if (w > TEMPLATE_MAX || h > TEMPLATE_MAX) {
-      warnings.push(`${name}: ${w}×${h} is large — slows detection. Crop one mob, not a region.`)
-    }
-  }
+  void templatesDir
+  void spritesRawDir
 
-  // Optional player crop.
-  if (opts.body.playerCrop) {
-    const dir = join(spritesRawDir, '_player')
-    mkdirSync(dir, { recursive: true })
-    await extractAndSave(opts.screenshotPng, opts.body.playerCrop, join(dir, 'stand.png'))
-  }
-
-  // Generate the runtime template library.
-  const importSummary = await importFromRawDir({ rawDir: spritesRawDir, templatesDir })
-
-  // Combat anchor (used for mobs_in_range when the player template doesn't
-  // detect at runtime).
-  //   X: gameWindow center — stable across the run, camera follows the
-  //      character horizontally so this tracks them well.
-  //   Y: playerCrop center if available — character is on a platform near
-  //      the bottom of the game window, NOT at vertical center (which lands
-  //      in the sky). Falls back to gameWindow center y if no playerCrop.
-  // y_band defaults to 80 px when we have playerCrop so mobs on other
-  // platforms (different y) don't count toward in-range checks.
-  let combatAnchor:
-    | {
-        x_offset_from_center: number
-        y_offset_from_center: number
-        y_band?: number
-      }
-    | undefined
-  const gw = opts.body.gameWindow
-  const pc = opts.body.playerCrop
-  if (gw || pc) {
-    const ax = gw ? gw.x + gw.w / 2 : pc!.x + pc!.w / 2
-    // Bias y toward player FEET (not chest center). Mob hitboxes' bbox
-    // centers sit at mob mid-height, but mushroom-class mobs are much
-    // shorter than the character — their centers land at ankle/foot level
-    // of the player. Anchoring at 75% of player crop height lines the
-    // y-band slab up with the mob row instead of the player's head.
-    const ay = pc ? pc.y + pc.h * 0.75 : gw!.y + gw!.h / 2
-    combatAnchor = {
-      x_offset_from_center: Math.round(ax - screenW / 2),
-      y_offset_from_center: Math.round(ay - screenH / 2),
-    }
-    if (pc) combatAnchor.y_band = 80
-  }
-
-  // Compose + write the routine YAML.
+  // Compose + write the routine YAML. modelPath points at the per-map ONNX
+  // weights produced by `python/export_onnx.py`. The runtime treats a missing
+  // file as "stub mode" — no detections, but everything else (minimap,
+  // movement, reflex) still works.
+  const modelPath = join('data', 'models', `${map}.onnx`)
   const calibrationData: CalibrationData = {
     resolution: [screenW, screenH],
     windowTitle: opts.body.windowTitle,
@@ -189,8 +125,7 @@ export async function orchestrateSave(
     minimapPlayerColor: { rgb: dotRgb, tolerance: 12 },
     bounds: { x: bx, y: by },
     waypointXs: opts.body.waypointXs,
-    templateDir: templatesDir,
-    combatAnchor,
+    modelPath,
   }
   writeRoutine({ routinePath, data: calibrationData })
 
@@ -204,23 +139,14 @@ export async function orchestrateSave(
     JSON.stringify({ resolution: [screenW, screenH], body: opts.body }, null, 2),
   )
 
-  logger.info(
-    {
-      routinePath,
-      templatesDir,
-      runtimeScale,
-      mobs: importSummary.mobs,
-      variants: importSummary.variants,
-    },
-    'calibrate: save complete',
-  )
+  logger.info({ routinePath, modelPath }, 'calibrate: save complete')
 
   return {
     routinePath,
     templatesDir,
-    manifestPath: importSummary.manifestPath,
-    templatesWritten: importSummary.variants,
-    warnings: [...importSummary.warnings, ...warnings],
+    manifestPath: '',
+    templatesWritten: 0,
+    warnings,
   }
 }
 
@@ -242,26 +168,6 @@ export async function sampleColor(
     .raw()
     .toBuffer()
   return [buf[0], buf[1], buf[2]]
-}
-
-/**
- * Crop a rect from the source PNG and save as PNG. Templates are kept at
- * native (capture-backing-pixel) size — v1.4 dropped the pre-downscale that
- * v1.3 used, because shrinking 90 px sprites to 30 px destroyed the texture
- * ZNCC depends on. The runtime crops the haystack to the game-window region
- * so templates and haystack stay scale-aligned at native size.
- */
-async function extractAndSave(
-  png: Buffer,
-  rect: Rect,
-  outPath: string,
-): Promise<{ w: number; h: number }> {
-  const left = Math.max(0, Math.round(rect.x))
-  const top = Math.max(0, Math.round(rect.y))
-  const width = Math.max(1, Math.round(rect.w))
-  const height = Math.max(1, Math.round(rect.h))
-  await sharp(png).extract({ left, top, width, height }).png().toFile(outPath)
-  return { w: width, h: height }
 }
 
 /** Sidecar path holding the full SaveBody from the last calibration of this map. */
@@ -351,13 +257,4 @@ export function loadExistingCalibration(
     playerCrop: playerCropPresent ? null : undefined,
   }
   return { resolution, body }
-}
-
-function sanitizeName(s: string): string {
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 32)
 }

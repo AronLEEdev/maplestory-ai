@@ -16,31 +16,13 @@ import { runDoctor } from '@/doctor'
 import { logger } from '@/core/logger'
 import { ReflexWorker, fillRatio } from '@/reflex/pixel-sampler'
 import { MinimapSampler } from '@/perception/minimap'
-import { TemplateLibrary } from '@/perception/template-library'
 import type { Rect, Action, GameState } from '@/core/types'
 import { defaultRegions } from '@/core/maplestory-defaults'
 import { ReplayWriter } from '@/replay/writer'
 import { join as pathJoin } from 'node:path'
-import { importFromRawDir } from '@/perception/sprite-import'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { startCalibrateServer } from '@/calibrate/server'
 import { exec } from 'node:child_process'
-
-const MAPLESTORY_IO_HELP = `
-For each mob on your map:
-  1. Visit  https://maplestory.io/api/<region>/<ver>/mob   (region e.g. GMS, MSEA, KMS)
-  2. Search by name or browse by ID.
-  3. Download these animation frames if available:
-       stand (or idle)  — most important; used as default template
-       move             — recommended
-       attack           — optional
-  4. Save to: data/sprites-raw/<map>/<mob_class>/<animation>.png
-  5. (Optional) drop a player snapshot to data/sprites-raw/<map>/_player/stand.png
-     for tighter combat distance. Without it the bot uses screen center.
-
-Region tip: GMS sprites usually work for any region — visual templates match
-even when mob IDs differ.
-`.trim()
 
 const program = new Command()
 program.name('maplestory.ai').description('Maplestory farming co-pilot').version('0.0.1')
@@ -138,74 +120,9 @@ program
       }
     }
 
-    // 3. Copy each template + its dims into the inspect dir, AND run the
-     //    same detection pipeline the runtime uses so we can mark each
-     //    template's bestPos on full-annotated.png. Lets the user spot
-     //    "this template scored 0.42 because it's matching a stump that
-     //    isn't the sprite I cropped" at a glance.
-    type DiagOverlay = { class: string; variant: string; bestScore: number; bestPos: { x: number; y: number } | null; templateW: number; templateH: number }
-    const detectionDiags: DiagOverlay[] = []
-    if (existsSync(routine.perception.template_dir)) {
-      const lib = await TemplateLibrary.load(routine.perception.template_dir)
-      const dims = lib.dims()
-      logger.info({ templates: dims }, 'templates loaded')
-      const tDir = routine.perception.template_dir
-      const files = (await fs.readdir(tDir)).filter((f) => f.endsWith('.png'))
-      for (const f of files) {
-        await fs.copyFile(pathJoin(tDir, f), pathJoin(opts.out, `template-${f}`))
-      }
-
-      // Run the same crop+detect path as orchestrator.ts so bestPos is in
-      // the same coord space the runtime sees.
-      try {
-        const region = routine.perception.search_region
-        const attackBandY = routine.perception.attack_band_y
-        const anchor = routine.perception.combat_anchor
-        const anchorY = H / 2 + (anchor?.y_offset_from_center ?? 0)
-        const extractX = region?.x ?? 0
-        let extractY = region?.y ?? 0
-        const extractW = region?.w ?? W
-        let extractH = region?.h ?? H
-        if (attackBandY) {
-          const top = Math.max(extractY, Math.floor(anchorY - attackBandY))
-          const bot = Math.min(extractY + extractH, Math.ceil(anchorY + attackBandY))
-          if (bot > top) {
-            extractY = top
-            extractH = bot - top
-          }
-        }
-        const haystack = await sharp(png)
-          .extract({ left: extractX, top: extractY, width: extractW, height: extractH })
-          .removeAlpha()
-          .raw()
-          .toBuffer()
-        const { diag } = await lib.detectFrame(
-          haystack,
-          extractW,
-          extractH,
-          routine.perception.match_threshold,
-          routine.perception.stride,
-          routine.perception.max_per_class,
-        )
-        for (const d of diag) {
-          if (!d.bestPos) {
-            detectionDiags.push({ ...d })
-            continue
-          }
-          // Map bestPos from haystack-space back to display-space.
-          detectionDiags.push({
-            ...d,
-            bestPos: { x: d.bestPos.x + extractX, y: d.bestPos.y + extractY },
-          })
-        }
-        logger.info({ diag: detectionDiags }, 'inspect: per-template detection diag')
-      } catch (err) {
-        logger.warn({ err }, 'inspect: detection diag failed — overlay will skip per-template scores')
-      }
-    }
-
-    // 4. Annotated full-frame: overlay rectangles using sharp.composite with
-    //    a tiny red 1px border SVG per region.
+    // 4. Annotated full-frame: overlay region rectangles. v2 inspect is
+    //    minimal — YOLO detection visualization will land alongside the
+    //    inference module in phase 5b.
     try {
       const svgRects = (Object.entries(routine.regions) as [string, Rect][])
         .filter(([, r]) => r != null)
@@ -214,58 +131,7 @@ program
         })
         .join('\n')
 
-      // Combat anchor + mobs_in_range visualization. The anchor is where the
-      // bot measures mob distance from when no `player` template detects.
-      // Show the point and the horizontal band any rotation rule of the form
-      // `mobs_in_range(N)` covers.
-      const anchorX = W / 2 + (routine.perception.combat_anchor?.x_offset_from_center ?? 0)
-      const anchorY = H / 2 + (routine.perception.combat_anchor?.y_offset_from_center ?? 0)
-      const ranges: number[] = []
-      for (const rule of routine.rotation) {
-        if (!('when' in rule)) continue
-        const m = /mobs_in_range\(\s*(\d+)\s*\)/.exec(rule.when)
-        if (m) ranges.push(Number(m[1]))
-      }
-      // Band height reflects combat_anchor.y_band (filters mobs by platform)
-      // when set; otherwise a 60-px sliver just to mark the anchor's row.
-      const yBand = routine.perception.combat_anchor?.y_band ?? 30
-      const rangeSvg = ranges
-        .map(
-          (px) =>
-            `<rect x="${anchorX - px}" y="${anchorY - yBand}" width="${px * 2}" height="${yBand * 2}" stroke="#0ff" stroke-width="2" fill="rgba(0,200,255,0.10)"/>` +
-            `<text x="${anchorX - px + 4}" y="${anchorY - yBand - 6}" font-size="16" fill="#0ff" font-family="sans-serif">mobs_in_range(${px})</text>`,
-        )
-        .join('\n')
-      const anchorSvg = `
-        <line x1="${anchorX - 18}" y1="${anchorY}" x2="${anchorX + 18}" y2="${anchorY}" stroke="lime" stroke-width="3"/>
-        <line x1="${anchorX}" y1="${anchorY - 18}" x2="${anchorX}" y2="${anchorY + 18}" stroke="lime" stroke-width="3"/>
-        <circle cx="${anchorX}" cy="${anchorY}" r="6" stroke="lime" stroke-width="3" fill="none"/>
-        <text x="${anchorX + 12}" y="${anchorY - 12}" font-size="18" fill="lime" font-family="sans-serif">combat anchor</text>
-      `
-
-      // Per-template bestPos markers — yellow if score >= threshold, gray
-       // otherwise. Lets the user see where each template thinks its match
-       // is (or guess at why a template isn't firing).
-      const passColor = '#fc0'
-      const failColor = '#888'
-      const threshold = routine.perception.match_threshold
-      const tplSvg = detectionDiags
-        .filter((d) => d.bestPos)
-        .map((d) => {
-          const c = d.bestScore >= threshold ? passColor : failColor
-          const bx = d.bestPos!.x
-          const by = d.bestPos!.y
-          const bw = d.templateW
-          const bh = d.templateH
-          const stroke = d.bestScore >= threshold ? 4 : 2
-          return (
-            `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" stroke="${c}" stroke-width="${stroke}" stroke-dasharray="${d.bestScore >= threshold ? '' : '6,4'}" fill="none"/>` +
-            `<text x="${bx}" y="${by + bh + 20}" font-size="16" fill="${c}" font-family="sans-serif" font-weight="600">${d.class}/${d.variant} ${d.bestScore.toFixed(2)}</text>`
-          )
-        })
-        .join('\n')
-
-      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}${rangeSvg}${anchorSvg}${tplSvg}</svg>`
+      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}</svg>`
       await sharp(png)
         .composite([{ input: Buffer.from(overlay), top: 0, left: 0 }])
         .toFile(pathJoin(opts.out, 'full-annotated.png'))
@@ -435,41 +301,9 @@ Next steps:
 `)
   })
 
-program
-  .command('import-sprites <map>')
-  .description('Import manually-downloaded sprites from data/sprites-raw/<map>/ into data/templates/<map>/')
-  .option('--from <dir>', 'override raw dir (default: data/sprites-raw/<map>)')
-  .option('--templates <dir>', 'override templates dir (default: data/templates/<map>)')
-  .addHelpText('after', `\nWhere to get sprites:\n${MAPLESTORY_IO_HELP}\n`)
-  .action(async (map, opts) => {
-    const rawDir = opts.from ?? pathJoin('data', 'sprites-raw', map)
-    const templatesDir = opts.templates ?? pathJoin('data', 'templates', map)
-    if (!existsSync(rawDir)) {
-      logger.error({ rawDir }, 'raw dir not found — drop sprite PNGs there first')
-      console.log(`\nWhere to get sprites:\n${MAPLESTORY_IO_HELP}\n`)
-      process.exit(1)
-    }
-    try {
-      const r = await importFromRawDir({ rawDir, templatesDir })
-      logger.info(
-        { mobs: r.mobs, variants: r.variants, manifestPath: r.manifestPath },
-        'import-sprites: done',
-      )
-      console.log(`
-Templates ready at ${templatesDir}/
-Imported ${r.mobs} mob class(es), ${r.variants} variant(s).
-
-In your routine YAML set:
-  perception:
-    template_dir: ${templatesDir}
-    fps: 12
-    match_threshold: 0.75
-`)
-    } catch (err) {
-      logger.error({ err }, 'import-sprites: failed')
-      process.exit(1)
-    }
-  })
+// `import-sprites` command removed in v2 — perception switched from ZNCC
+// templates to YOLO. Frame capture + canvas labeling + python training is
+// now the per-map workflow (see `capture <map>` + canvas labeler).
 
 program
   .command('record')
@@ -594,27 +428,9 @@ program
     const backend = new ForegroundNutBackend()
     const cap = new ScreenshotDesktopCapture()
 
-    if (!existsSync(routine.perception.template_dir)) {
-      logger.error(
-        { template_dir: routine.perception.template_dir },
-        'template_dir not found — run `import-sprites <map>` first',
-      )
-      process.exit(1)
-    }
-    const templateLibrary = await TemplateLibrary.load(routine.perception.template_dir)
-    const templateThreshold = routine.perception.match_threshold
-    const templateStride = routine.perception.stride
-    const templateSearchRegion = routine.perception.search_region
-    const templateMaxPerClass = routine.perception.max_per_class
-    const templateAttackBandY = routine.perception.attack_band_y
-    logger.info(
-      {
-        template_dir: routine.perception.template_dir,
-        templates: templateLibrary.size(),
-        classes: templateLibrary.classes(),
-      },
-      'template library loaded',
-    )
+    // v2: YOLO inference module hooks in here in phase 5b. Phase 1 leaves
+    // the perception pipeline empty — orchestrator runs minimap + reflex
+    // only, no template loading.
 
     const minimapColor = routine.minimap_player_color ?? {
       rgb: [240, 220, 60] as [number, number, number],
@@ -655,13 +471,6 @@ program
       capture: cap,
       reflex,
       minimap,
-      templateLibrary,
-      templateThreshold,
-      templateStride,
-      templateMaxPerClass,
-      templateSearchRegion,
-      templateAttackBandY,
-      combatAnchor: routine.perception.combat_anchor,
       bounds: routine.bounds
         ? {
             x: routine.bounds.x as [number, number],

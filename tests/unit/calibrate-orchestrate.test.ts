@@ -82,42 +82,7 @@ describe('sampleColor', () => {
 })
 
 describe('orchestrateSave', () => {
-  it('end-to-end happy path: writes templates manifest + valid routine YAML', async () => {
-    const png = await makeFakeScreenshot()
-    const body: SaveBody = {
-      windowTitle: 'MapleStory Worlds',
-      regions: {
-        hp: { x: 50, y: 40, w: 100, h: 20 },
-        mp: { x: 200, y: 40, w: 100, h: 20 },
-        minimap: { x: 600, y: 10, w: 180, h: 170 },
-      },
-      playerDotAt: { x: 640, y: 60 }, // yellow dot in screenshot
-      bounds: { topLeft: { x: 10, y: 30 }, bottomRight: { x: 170, y: 160 } },
-      waypointXs: [25, 150],
-      mobCrops: [{ name: 'green_mushroom', rect: { x: 400, y: 300, w: 60, h: 60 } }],
-    }
-    const result = await orchestrateSave({
-      map: 'henesys',
-      screenshotPng: png,
-      body,
-      routinesDir: join(root, 'routines'),
-      spritesRawDir: join(root, 'sprites-raw'),
-      templatesDir: join(root, 'templates'),
-    })
-    expect(existsSync(result.routinePath)).toBe(true)
-    expect(existsSync(result.manifestPath)).toBe(true)
-    expect(result.templatesWritten).toBe(1)
-
-    const routine = YAML.parse(readFileSync(result.routinePath, 'utf8'))
-    expect(routine.window_title).toBe('MapleStory Worlds')
-    expect(routine.regions.hp).toEqual({ x: 50, y: 40, w: 100, h: 20 })
-    expect(routine.minimap_player_color.rgb[0]).toBeGreaterThan(200)
-    expect(routine.bounds.x).toEqual([10, 170])
-    expect(routine.bounds.y).toEqual([30, 160])
-    expect(routine.movement.primitives[0]).toEqual({ op: 'walk_to_x', x: 25 })
-  })
-
-  it('saves player crop when present', async () => {
+  it('end-to-end happy path: writes valid routine YAML pointing at YOLO model', async () => {
     const png = await makeFakeScreenshot()
     const body: SaveBody = {
       windowTitle: 'MapleStory Worlds',
@@ -129,8 +94,7 @@ describe('orchestrateSave', () => {
       playerDotAt: { x: 640, y: 60 },
       bounds: { topLeft: { x: 10, y: 30 }, bottomRight: { x: 170, y: 160 } },
       waypointXs: [25, 150],
-      mobCrops: [{ name: 'green_mushroom', rect: { x: 400, y: 300, w: 60, h: 60 } }],
-      playerCrop: { x: 200, y: 200, w: 80, h: 100 },
+      mobCrops: [],
     }
     const result = await orchestrateSave({
       map: 'henesys',
@@ -140,11 +104,44 @@ describe('orchestrateSave', () => {
       spritesRawDir: join(root, 'sprites-raw'),
       templatesDir: join(root, 'templates'),
     })
-    // 1 mob + 1 player = 2 templates total
-    expect(result.templatesWritten).toBe(2)
-    const manifest = JSON.parse(readFileSync(result.manifestPath, 'utf8'))
-    const classes = new Set(manifest.templates.map((t: { class: string }) => t.class))
-    expect(classes.has('mob_green_mushroom')).toBe(true)
-    expect(classes.has('player')).toBe(true)
+    expect(existsSync(result.routinePath)).toBe(true)
+    expect(result.templatesWritten).toBe(0)
+
+    const routine = YAML.parse(readFileSync(result.routinePath, 'utf8'))
+    expect(routine.window_title).toBe('MapleStory Worlds')
+    expect(routine.regions.hp).toEqual({ x: 50, y: 40, w: 100, h: 20 })
+    expect(routine.minimap_player_color.rgb[0]).toBeGreaterThan(200)
+    expect(routine.bounds.x).toEqual([10, 170])
+    expect(routine.bounds.y).toEqual([30, 160])
+    expect(routine.movement.primitives[0]).toEqual({ op: 'walk_to_x', x: 25 })
+    expect(routine.perception.model_path).toBe('data/models/henesys.onnx')
+  })
+
+  it('writes the v2 sidecar JSON next to the routine yaml', async () => {
+    const png = await makeFakeScreenshot()
+    const body: SaveBody = {
+      windowTitle: 'MapleStory Worlds',
+      regions: {
+        hp: { x: 50, y: 40, w: 100, h: 20 },
+        mp: { x: 200, y: 40, w: 100, h: 20 },
+        minimap: { x: 600, y: 10, w: 180, h: 170 },
+      },
+      playerDotAt: { x: 640, y: 60 },
+      bounds: { topLeft: { x: 10, y: 30 }, bottomRight: { x: 170, y: 160 } },
+      waypointXs: [25, 150],
+      mobCrops: [],
+    }
+    await orchestrateSave({
+      map: 'henesys',
+      screenshotPng: png,
+      body,
+      routinesDir: join(root, 'routines'),
+      spritesRawDir: join(root, 'sprites-raw'),
+      templatesDir: join(root, 'templates'),
+    })
+    const sidecar = join(root, 'routines', '.calibrate', 'henesys.json')
+    expect(existsSync(sidecar)).toBe(true)
+    const data = JSON.parse(readFileSync(sidecar, 'utf8'))
+    expect(data.body.windowTitle).toBe('MapleStory Worlds')
   })
 })

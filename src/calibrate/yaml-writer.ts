@@ -18,14 +18,8 @@ export interface CalibrationData {
   minimapPlayerColor: { rgb: [number, number, number]; tolerance: number }
   bounds: { x: [number, number]; y: [number, number] }
   waypointXs: number[]
-  templateDir: string
-  /** Optional combat anchor offsets — when set, pins the screen anchor used
-   *  for `mobs_in_range` to the calibration-time character location. */
-  combatAnchor?: {
-    x_offset_from_center: number
-    y_offset_from_center: number
-    y_band?: number
-  }
+  /** Path to the YOLO ONNX weights for this map (data/models/<map>.onnx). */
+  modelPath: string
 }
 
 export interface WriteOpts {
@@ -77,15 +71,8 @@ const DEFAULT_STOP_CONDITION = {
 }
 
 const DEFAULT_PERCEPTION = {
-  fps: 12,
-  // v1.4.1: animated game sprites + anti-aliased edges + slight background
-  // shifts run real ZNCC matches at 0.55–0.75 (not the textbook 0.85+).
-  // 0.60 picks up more real mobs without re-flooding from native-scale noise.
-  match_threshold: 0.6,
-  // Stride 12 covers a 60-px template ~5× across, plenty for ZNCC peak
-  // detection, while keeping ops budget under ~1s with full-window scanning.
-  stride: 12,
-  max_per_class: 8,
+  fps: 8,
+  confidence_threshold: 0.5,
 }
 
 function buildMovement(waypointXs: number[]) {
@@ -130,14 +117,8 @@ export function composeRoutine(
       const ep = existing.perception as Record<string, unknown>
       preserved.perception = {
         fps: ep.fps ?? DEFAULT_PERCEPTION.fps,
-        match_threshold: ep.match_threshold ?? DEFAULT_PERCEPTION.match_threshold,
-        stride: ep.stride ?? DEFAULT_PERCEPTION.stride,
-        max_per_class: ep.max_per_class ?? DEFAULT_PERCEPTION.max_per_class,
-        // Preserve a hand-tuned (or previously-derived) combat_anchor when
-        // the new calibration data didn't recompute one. Without this,
-        // re-saving an old calibration that used yaml-fallback hydrate would
-        // wipe a working anchor and reset y to gameWindow center (the sky).
-        ...(ep.combat_anchor ? { combat_anchor: ep.combat_anchor } : {}),
+        confidence_threshold:
+          ep.confidence_threshold ?? DEFAULT_PERCEPTION.confidence_threshold,
       }
     }
   }
@@ -152,14 +133,8 @@ export function composeRoutine(
     bounds: data.bounds,
     reflex: preserved.reflex ?? DEFAULT_REFLEX,
     perception: {
-      template_dir: data.templateDir, // ALWAYS overwrite — calibrator owns this path
+      model_path: data.modelPath,
       ...((preserved.perception as Record<string, unknown>) ?? DEFAULT_PERCEPTION),
-      ...(data.combatAnchor ? { combat_anchor: data.combatAnchor } : {}),
-      // v1.4 + v1.4.1: search_region narrows ZNCC to the gameWindow.
-      // attack_band_y was a hard pre-detection slab in v1.4 — dropped in
-      // v1.4.1 because anchor errors silently hid mobs. Use
-      // combat_anchor.y_band as a post-detection enemy filter instead.
-      ...(data.gameWindow ? { search_region: data.gameWindow } : {}),
     },
     rotation: preserved.rotation ?? DEFAULT_ROTATION,
     movement: buildMovement(data.waypointXs),
