@@ -357,20 +357,28 @@ cv.addEventListener('mousedown', (e) => {
   }
 })
 
-cv.addEventListener('mousemove', (e) => {
+// Mousemove is on `window` (not `cv`) so a drag that leaves the canvas — e.g.
+// resizing the right edge of a rect when zoomed in — keeps tracking. Without
+// this, the cursor crosses the canvas boundary and mousemove stops firing,
+// pinning the resize at the viewport edge.
+window.addEventListener('mousemove', (e) => {
   const c = canvasCoords(e)
   const ip = canvasToImage(c.x, c.y)
-  state.cursorImgX = Math.round(ip.x)
-  state.cursorImgY = Math.round(ip.y)
-  // Pixel-color readout — read from hidden full-res canvas.
-  if (state.pixelCtx) {
-    const ix = Math.max(0, Math.min(state.img.width - 1, state.cursorImgX))
-    const iy = Math.max(0, Math.min(state.img.height - 1, state.cursorImgY))
-    try {
-      const d = state.pixelCtx.getImageData(ix, iy, 1, 1).data
-      state.cursorRgb = [d[0], d[1], d[2]]
-    } catch {
-      state.cursorRgb = null
+  // Only refresh the cursor pixel readout when the pointer is over the canvas
+  // itself, or while a drag/pan is active (so the readout follows the gesture).
+  const overCanvas = e.target === cv
+  if (overCanvas || pan || drag) {
+    state.cursorImgX = Math.round(ip.x)
+    state.cursorImgY = Math.round(ip.y)
+    if (state.pixelCtx) {
+      const ix = Math.max(0, Math.min(state.img.width - 1, state.cursorImgX))
+      const iy = Math.max(0, Math.min(state.img.height - 1, state.cursorImgY))
+      try {
+        const d = state.pixelCtx.getImageData(ix, iy, 1, 1).data
+        state.cursorRgb = [d[0], d[1], d[2]]
+      } catch {
+        state.cursorRgb = null
+      }
     }
   }
   if (pan) {
@@ -394,7 +402,7 @@ cv.addEventListener('mousemove', (e) => {
       const dy = ip.y - drag.startImg.y
       drag.target.set(applyHandleDelta(drag.origRect, drag.handle, dx, dy))
     }
-  } else {
+  } else if (overCanvas) {
     // Hover cursor feedback.
     if (panTriggered({ button: 0, shiftKey: e.shiftKey })) {
       cv.style.cursor = 'grab'
@@ -409,10 +417,10 @@ cv.addEventListener('mousemove', (e) => {
     }
   }
   if (pan || drag) redraw()
-  updateCursorReadout()
+  if (overCanvas || pan || drag) updateCursorReadout()
 })
 
-cv.addEventListener('mouseup', () => {
+window.addEventListener('mouseup', () => {
   if (pan) {
     pan = null
     cv.style.cursor = state.spaceHeld || state.handTool ? 'grab' : 'crosshair'
