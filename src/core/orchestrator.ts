@@ -45,6 +45,10 @@ export class Orchestrator {
   private states?: GameState[]
   private stateIdx = 0
   private mode: RunMode
+  private tickIndex = 0
+  /** Log every internal step at INFO for the first N ticks so silent hangs
+   *  are pinpoint-localizable. After that the level drops to debug. */
+  private static readonly VERBOSE_TICKS = 3
 
   constructor(private opts: OrchestratorOpts) {
     this.mode = opts.mode
@@ -85,9 +89,15 @@ export class Orchestrator {
   }
 
   async runOneTick(): Promise<void> {
+    const verbose = this.tickIndex < Orchestrator.VERBOSE_TICKS
+    const log = verbose ? logger.info.bind(logger) : logger.debug.bind(logger)
+    const tickStartedAt = this.opts.clock.now()
+    log({ tick: this.tickIndex }, 'tick: enter')
     if (this.opts.reflex) {
+      const t0 = this.opts.clock.now()
       try {
         await this.opts.reflex.tick()
+        log({ ms: this.opts.clock.now() - t0 }, 'tick: reflex done')
       } catch (err) {
         logger.warn({ err }, 'reflex.tick threw')
       }
@@ -99,11 +109,14 @@ export class Orchestrator {
       const tCapStart = this.opts.clock.now()
       // captureScreen returns a PNG buffer; decode to raw RGB once here.
       const png = await this.opts.capture.captureScreen()
+      log({ bytes: png.length, ms: this.opts.clock.now() - tCapStart }, 'tick: captureScreen done')
+      const tSharp = this.opts.clock.now()
       const sharp = (await import('sharp')).default
       const meta = await sharp(png).metadata()
       const screenW = meta.width ?? 1920
       const screenH = meta.height ?? 1080
       const tCapMs = this.opts.clock.now() - tCapStart
+      log({ screenW, screenH, ms: this.opts.clock.now() - tSharp }, 'tick: sharp meta done')
 
       // Template detection. Optionally crop to a search region first.
       const lib = this.opts.templateLibrary
@@ -113,6 +126,7 @@ export class Orchestrator {
       let haystack: Buffer
       let hw = screenW
       let hh = screenH
+      const tDecode = this.opts.clock.now()
       if (region) {
         haystack = await sharp(png)
           .extract({ left: region.x, top: region.y, width: region.w, height: region.h })
@@ -124,9 +138,14 @@ export class Orchestrator {
       } else {
         haystack = await sharp(png).removeAlpha().raw().toBuffer()
       }
+      log(
+        { hw, hh, bytes: haystack.length, ms: this.opts.clock.now() - tDecode },
+        'tick: sharp raw decode done',
+      )
       const tDetStart = this.opts.clock.now()
       let frame: PerceptionFrame = await lib.detectFrame(haystack, hw, hh, threshold, stride)
       const tDetMs = this.opts.clock.now() - tDetStart
+      log({ detections: frame.detections.length, ms: tDetMs }, 'tick: detect done')
       if (region) {
         frame = {
           ...frame,
@@ -150,8 +169,13 @@ export class Orchestrator {
       })
       let minimapPos = null
       if (this.opts.minimap) {
+        const t0 = this.opts.clock.now()
         try {
           minimapPos = await this.opts.minimap.sample()
+          log(
+            { minimapPos, ms: this.opts.clock.now() - t0 },
+            'tick: minimap sample done',
+          )
         } catch (err) {
           logger.warn({ err }, 'minimap sample threw')
         }
@@ -178,8 +202,11 @@ export class Orchestrator {
     }
     if (!state) return
     this.opts.bus.emit('state.built', state)
+    log({ ms: this.opts.clock.now() - tickStartedAt }, 'tick: state built + emitted')
     this.routineRunner.tick(state)
     await this.scheduler.tick()
+    log({ ms: this.opts.clock.now() - tickStartedAt }, 'tick: complete')
+    this.tickIndex++
   }
 
   pause(reason = 'user') {
