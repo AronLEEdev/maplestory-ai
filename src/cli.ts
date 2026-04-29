@@ -23,6 +23,8 @@ import { ReplayWriter } from '@/replay/writer'
 import { join as pathJoin } from 'node:path'
 import { importFromRawDir } from '@/perception/sprite-import'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { startCalibrateServer } from '@/calibrate/server'
+import { exec } from 'node:child_process'
 
 const MAPLESTORY_IO_HELP = `
 For each mob on your map:
@@ -181,6 +183,74 @@ If full.png doesn't show the game → capture is wrong (Mac Spaces issue or disp
 If region-hp.png is empty or shows wrong content → routine.regions.hp coords are wrong
 If templates look way smaller/larger than mobs in full.png → multi-scale mismatch
 `)
+  })
+
+program
+  .command('calibrate <map>')
+  .description(
+    'Capture screen + open browser canvas to calibrate regions, bounds, sprites, waypoints — writes routines/<map>.yaml + data/templates/<map>/ in one go',
+  )
+  .option('--countdown <s>', 'seconds to wait before capture so you can focus the game', '5')
+  .option('--port <n>', 'fastify port (0 = random)', '0')
+  .action(async (map, opts) => {
+    const cap = new ScreenshotDesktopCapture()
+    const countdown = Number(opts.countdown)
+    if (countdown > 0) {
+      logger.info(`focus the Maplestory window — capturing in ${countdown}s`)
+      for (let i = countdown; i > 0; i--) {
+        console.log(`  ...${i}`)
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+    const png = await cap.captureScreen()
+    logger.info({ bytes: png.length }, 'screen captured — starting calibrate server')
+
+    let exitCode = 0
+    await new Promise<void>((resolve, reject) => {
+      startCalibrateServer({
+        map,
+        screenshotPng: png,
+        port: Number(opts.port),
+        onSave: async (result) => {
+          logger.info(result, 'calibrate: saved')
+          console.log(`
+Calibration complete:
+  routine:   ${result.routinePath}
+  templates: ${result.templatesDir}  (${result.templatesWritten} variants)
+${result.warnings.length ? '\nwarnings:\n  - ' + result.warnings.join('\n  - ') + '\n' : ''}
+Next:
+  npm run dev -- inspect ${result.routinePath}
+  npm run dev -- run ${result.routinePath} --mode dry-run
+`)
+          await handle.close()
+          resolve()
+        },
+        onCancel: async () => {
+          logger.info('calibrate: cancelled by user')
+          exitCode = 1
+          await handle.close()
+          resolve()
+        },
+      })
+        .then((h) => {
+          handle = h
+          // Auto-open the URL in the user's default browser.
+          const opener =
+            process.platform === 'darwin'
+              ? 'open'
+              : process.platform === 'win32'
+                ? 'start ""'
+                : 'xdg-open'
+          exec(`${opener} ${h.url}`, () => {})
+          console.log(`
+Calibration server: ${h.url}
+(opening in browser; if it doesn't appear, copy the URL manually)
+`)
+        })
+        .catch(reject)
+      let handle: { close: () => Promise<void> } = { close: async () => {} }
+    })
+    process.exit(exitCode)
   })
 
 program

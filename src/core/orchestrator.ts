@@ -142,7 +142,6 @@ export class Orchestrator {
       const longEdge = Math.max(screenW, screenH)
       const scale = longEdge > MAX_HAYSTACK_LONG_EDGE ? longEdge / MAX_HAYSTACK_LONG_EDGE : 1
 
-      let haystack: Buffer
       let hw = screenW
       let hh = screenH
       const tDecode = this.opts.clock.now()
@@ -164,7 +163,7 @@ export class Orchestrator {
         hw = newW
         hh = newH
       }
-      haystack = await pipeline.removeAlpha().raw().toBuffer()
+      const haystack: Buffer = await pipeline.removeAlpha().raw().toBuffer()
       log(
         { hw, hh, bytes: haystack.length, scale, ms: this.opts.clock.now() - tDecode },
         'tick: sharp raw decode done',

@@ -8,4 +8,14 @@ module.exports = {
     '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     '@typescript-eslint/explicit-module-boundary-types': 'off',
   },
+  overrides: [
+    {
+      // Browser-side calibration UI runs in the user's browser, not Node.
+      files: ['src/calibrate/public/**/*.js'],
+      env: { browser: true, node: false },
+      rules: {
+        '@typescript-eslint/no-unused-vars': 'off',
+      },
+    },
+  ],
 }

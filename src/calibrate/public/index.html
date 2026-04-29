@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>maplestory.ai — calibrate</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>maplestory.ai calibrate</h1>
+      <div id="step-indicator"></div>
+    </header>
+
+    <main>
+      <section id="instruction">
+        <p id="instr-text">Loading…</p>
+        <p class="hint" id="instr-hint"></p>
+      </section>
+
+      <section id="canvas-wrap">
+        <canvas id="cv"></canvas>
+      </section>
+
+      <section id="state-panel">
+        <div id="state-list"></div>
+      </section>
+    </main>
+
+    <footer>
+      <button id="btn-back" disabled>← Back</button>
+      <button id="btn-clear">Clear last</button>
+      <button id="btn-next">Next →</button>
+      <button id="btn-save" disabled>Save</button>
+      <button id="btn-cancel">Cancel</button>
+    </footer>
+
+    <script type="module" src="/static/canvas.js"></script>
+  </body>
+</html>

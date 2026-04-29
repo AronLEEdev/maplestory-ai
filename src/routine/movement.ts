@@ -8,6 +8,21 @@ export interface MovementCtx {
 }
 
 const TOLERANCE = 5
+/**
+ * Default hold time for a `walk_to_x` press, in milliseconds.
+ *
+ * Each perception tick takes ~2s (capture + ZNCC + state build). The movement
+ * primitive only fires once per tick, so a 50ms tap leaves the character
+ * standing for ~1950ms / tick. Bump to 800ms so the character actually walks
+ * during the bulk of the tick, then briefly idles while perception runs.
+ *
+ * Note: while a press is being held the actuator's await blocks the run loop.
+ * Reflex pots from the previous tick already fired (priority queue runs
+ * emergency first). New HP/MP samples don't happen until the next tick, so
+ * worst-case pot reaction lags by one full tick during continuous movement.
+ * Acceptable trade-off for actually-moving gameplay.
+ */
+const DEFAULT_WALK_HOLD_MS = 800
 
 export class MovementFsm {
   private idx = 0
@@ -27,7 +42,11 @@ export class MovementFsm {
           this.advance()
           return
         }
-        emit({ kind: 'press', key: delta > 0 ? 'right' : 'left', holdMs: 50 })
+        emit({
+          kind: 'press',
+          key: delta > 0 ? 'right' : 'left',
+          holdMs: DEFAULT_WALK_HOLD_MS,
+        })
         return
       }
       case 'jump_left':
