@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import YAML from 'yaml'
-import { Routine, coerceLegacyPerception } from '@/routine/schema'
+import { Routine } from '@/routine/schema'
 
 const valid = `
 game: maplestory
@@ -15,11 +15,10 @@ reflex:
   - { region: hp, metric: red_pixel_ratio, below: 0.30, cooldown_ms: 800,
       action: { kind: press, key: page_up } }
 perception:
-  mode: yolo
-  model: yolov8n-maplestory
-  fps: 8
-  classes: [player, mob_generic, rune, portal]
-  confidence_threshold: 0.6
+  template_dir: data/templates/x
+  fps: 12
+  match_threshold: 0.75
+  stride: 2
 rotation:
   - { when: 'mobs_in_range(300) >= 1', action: { kind: press, key: ctrl }, cooldown_ms: 500 }
   - { every: 30s, action: { kind: press, key: shift } }
@@ -55,40 +54,26 @@ describe('Routine schema', () => {
     expect(() => Routine.parse(obj)).toThrow()
   })
 
-  it('accepts perception.mode = template', () => {
+  it('accepts optional combat_anchor block', () => {
     const obj = YAML.parse(valid)
-    obj.perception = {
-      mode: 'template',
-      template_dir: 'data/templates/x',
-      fps: 12,
-      match_threshold: 0.75,
-      stride: 2,
+    obj.perception.combat_anchor = {
+      x_offset_from_center: -50,
+      y_offset_from_center: 0,
+      y_band: 100,
+      metric: 'horizontal',
     }
     expect(() => Routine.parse(obj)).not.toThrow()
   })
 
-  it('rejects perception block missing mode discriminator', () => {
+  it('rejects unknown combat_anchor.metric', () => {
     const obj = YAML.parse(valid)
-    delete obj.perception.mode
+    obj.perception.combat_anchor = { metric: 'manhattan' }
     expect(() => Routine.parse(obj)).toThrow()
   })
 
-  it('coerceLegacyPerception injects mode: yolo when missing', () => {
+  it('rejects perception block missing template_dir', () => {
     const obj = YAML.parse(valid)
-    delete obj.perception.mode
-    coerceLegacyPerception(obj)
-    expect(obj.perception.mode).toBe('yolo')
-    expect(() => Routine.parse(obj)).not.toThrow()
-  })
-
-  it('coerceLegacyPerception leaves mode alone when present', () => {
-    const obj = YAML.parse(valid)
-    obj.perception.mode = 'template'
-    obj.perception.template_dir = 'data/templates/x'
-    delete obj.perception.model
-    delete obj.perception.classes
-    delete obj.perception.confidence_threshold
-    coerceLegacyPerception(obj)
-    expect(obj.perception.mode).toBe('template')
+    delete obj.perception.template_dir
+    expect(() => Routine.parse(obj)).toThrow()
   })
 })

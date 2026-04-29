@@ -29,7 +29,7 @@ const routine: Routine = {
 function stateWithMobs(distance: number, playerX = 0): GameState {
   return {
     timestamp: 0,
-    player: { pos: { x: playerX, y: 0 }, screenPos: { x: playerX, y: 0 }, hp: 1, mp: 1 },
+    player: { pos: { x: playerX, y: 0 }, screenPos: { x: playerX, y: 0 }, posSource: 'detected', hp: 1, mp: 1 },
     enemies:
       distance >= 0
         ? [{ type: 'mob_generic', pos: { x: playerX + distance, y: 0 }, distancePx: distance }]

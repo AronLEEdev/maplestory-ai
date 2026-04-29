@@ -34,19 +34,18 @@ export async function runDoctor(): Promise<number> {
     fail(`nut.js failed: ${(e as Error).message}`)
   }
 
-  if (process.env.ANTHROPIC_API_KEY) pass('ANTHROPIC_API_KEY set')
-  else warn('ANTHROPIC_API_KEY not set (needed for analyze)')
+  if (process.env.ANTHROPIC_API_KEY) pass('ANTHROPIC_API_KEY set (only needed for `analyze --api`)')
+  else warn('ANTHROPIC_API_KEY not set (only matters for `analyze --api`; default Claude Code path needs no key)')
 
-  // Both perception paths are valid; surface what's available without failing.
-  if (existsSync('models/yolov8n-maplestory.onnx')) pass('YOLO model present (mode: yolo)')
-  else warn('models/yolov8n-maplestory.onnx missing (only matters for mode: yolo)')
+  if (existsSync('data/templates')) pass('data/templates dir present')
+  else warn('data/templates missing — run `import-sprites <map>` after dropping sprites into data/sprites-raw/<map>/')
 
-  if (existsSync('data/templates')) pass('data/templates dir present (mode: template)')
-  else warn('data/templates missing — run `calibrate` to bootstrap (mode: template)')
+  if (existsSync('data/sprites-raw')) pass('data/sprites-raw dir present')
+  else warn('data/sprites-raw missing — needed before first `import-sprites <map>`')
 
   const fg = await getForegroundWindowTitle()
   if (fg && fg.toLowerCase().includes('maplestory')) pass(`Maplestory focused: ${fg}`)
-  else warn('Maplestory window not currently focused (optional)')
+  else warn(`Maplestory window not currently focused (optional). Foreground reads: "${fg ?? 'unknown'}"`)
 
   return ok ? 0 : 1
 }

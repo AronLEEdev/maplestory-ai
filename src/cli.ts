@@ -2,7 +2,7 @@ import { Command } from 'commander'
 import { readFileSync, existsSync } from 'node:fs'
 import YAML from 'yaml'
 import 'dotenv/config'
-import { Routine, coerceLegacyPerception } from '@/routine/schema'
+import { Routine } from '@/routine/schema'
 import { Orchestrator, type RunMode } from '@/core/orchestrator'
 import { TypedBus } from '@/core/bus'
 import { RealClock } from '@/core/clock'
@@ -14,15 +14,30 @@ import { Recorder } from '@/recorder/index'
 import { analyze } from '@/analyzer/index'
 import { runDoctor } from '@/doctor'
 import { logger } from '@/core/logger'
-import { YoloPerception } from '@/perception/yolo'
 import { ReflexWorker, redPixelRatio, bluePixelRatio } from '@/reflex/pixel-sampler'
 import { MinimapSampler } from '@/perception/minimap'
 import { TemplateLibrary } from '@/perception/template-library'
-import type { Rect, Action } from '@/core/types'
+import type { Rect, Action, GameState } from '@/core/types'
 import { defaultRegions } from '@/core/maplestory-defaults'
 import { ReplayWriter } from '@/replay/writer'
 import { join as pathJoin } from 'node:path'
-import { runCalibrate, cropTemplates } from '@/perception/auto-calibrate'
+import { importFromRawDir } from '@/perception/sprite-import'
+
+const MAPLESTORY_IO_HELP = `
+For each mob on your map:
+  1. Visit  https://maplestory.io/api/<region>/<ver>/mob   (region e.g. GMS, MSEA, KMS)
+  2. Search by name or browse by ID.
+  3. Download these animation frames if available:
+       stand (or idle)  — most important; used as default template
+       move             — recommended
+       attack           — optional
+  4. Save to: data/sprites-raw/<map>/<mob_class>/<animation>.png
+  5. (Optional) drop a player snapshot to data/sprites-raw/<map>/_player/stand.png
+     for tighter combat distance. Without it the bot uses screen center.
+
+Region tip: GMS sprites usually work for any region — visual templates match
+even when mob IDs differ.
+`.trim()
 
 const program = new Command()
 program.name('maplestory.ai').description('Maplestory farming co-pilot').version('0.0.1')
@@ -35,57 +50,39 @@ program
   })
 
 program
-  .command('calibrate <name>')
-  .description('Capture frames + emit a CALIBRATE.md prompt for Claude Code')
-  .option('--frames <n>', 'frames to capture', '10')
-  .option('--interval <ms>', 'ms between captures', '1000')
-  .option('--out <dir>', 'output dir', 'data/calibrations')
-  .action(async (name, opts) => {
-    const cap = new ScreenshotDesktopCapture()
-    const clock = new RealClock()
-    logger.info(`focus Maplestory; capturing ${opts.frames} frames @ ${opts.interval}ms`)
-    const r = await runCalibrate({
-      capture: cap,
-      clock,
-      outDir: opts.out,
-      name,
-      frames: Number(opts.frames),
-      intervalMs: Number(opts.interval),
-    })
-    logger.info({ ...r }, 'calibration captured')
-    console.log(`
-Next step — let Claude Code identify the mobs:
-
-  1. Open Claude Code in this repo (the \`claude\` CLI).
-  2. Run the slash command:
-       /calibrate-map ${r.bundlePath}
-     (Or just say: "Read ${r.bundlePath} and follow it.")
-  3. Claude Code will write ${r.calibrationDir}/manifest-source.json.
-  4. Then run:
-       npm run dev -- crop-templates ${name}
-`)
-  })
-
-program
-  .command('crop-templates <name>')
-  .description('Crop template PNGs from a Claude-Code-produced manifest-source.json')
-  .option('--calibrations <dir>', 'calibrations dir', 'data/calibrations')
-  .option('--templates <dir>', 'templates output dir', 'data/templates')
-  .action(async (name, opts) => {
-    const calibrationDir = pathJoin(opts.calibrations, name)
-    const templatesDir = pathJoin(opts.templates, name)
-    const r = await cropTemplates({ calibrationDir, templatesDir })
-    logger.info(r, 'templates cropped')
-    console.log(`
+  .command('import-sprites <map>')
+  .description('Import manually-downloaded sprites from data/sprites-raw/<map>/ into data/templates/<map>/')
+  .option('--from <dir>', 'override raw dir (default: data/sprites-raw/<map>)')
+  .option('--templates <dir>', 'override templates dir (default: data/templates/<map>)')
+  .addHelpText('after', `\nWhere to get sprites:\n${MAPLESTORY_IO_HELP}\n`)
+  .action(async (map, opts) => {
+    const rawDir = opts.from ?? pathJoin('data', 'sprites-raw', map)
+    const templatesDir = opts.templates ?? pathJoin('data', 'templates', map)
+    if (!existsSync(rawDir)) {
+      logger.error({ rawDir }, 'raw dir not found — drop sprite PNGs there first')
+      console.log(`\nWhere to get sprites:\n${MAPLESTORY_IO_HELP}\n`)
+      process.exit(1)
+    }
+    try {
+      const r = await importFromRawDir({ rawDir, templatesDir })
+      logger.info(
+        { mobs: r.mobs, variants: r.variants, manifestPath: r.manifestPath },
+        'import-sprites: done',
+      )
+      console.log(`
 Templates ready at ${templatesDir}/
+Imported ${r.mobs} mob class(es), ${r.variants} variant(s).
 
 In your routine YAML set:
   perception:
-    mode: template
     template_dir: ${templatesDir}
     fps: 12
     match_threshold: 0.75
 `)
+    } catch (err) {
+      logger.error({ err }, 'import-sprites: failed')
+      process.exit(1)
+    }
   })
 
 program
@@ -99,6 +96,7 @@ program
     const cap = new ScreenshotDesktopCapture()
     const clock = new RealClock()
     const fg = await getForegroundWindowTitle()
+    logger.info({ foregroundWindow: fg }, 'recording will run while this window is focused')
     const W = Number(opts.width)
     const H = Number(opts.height)
     const regions = defaultRegions(W, H)
@@ -109,7 +107,8 @@ program
           cap.captureRegion(regions.mp),
         ])
         return { hp: redPixelRatio(hpBuf), mp: bluePixelRatio(mpBuf) }
-      } catch {
+      } catch (err) {
+        logger.warn({ err }, 'recorder: vitals sample failed')
         return { hp: 1, mp: 1 }
       }
     }
@@ -124,8 +123,6 @@ program
     })
     await recorder.start({ resolution: [W, H], windowTitle: fg ?? 'MapleStory' })
 
-    // Keystroke capture — feed every keydown/keyup into the recorder.
-    // Skip F12 (the stop hotkey) so it doesn't pollute the recording.
     const { GlobalKeyboardListener } = await import('node-global-key-listener')
     const startedAt = clock.now()
     const keyListener = new GlobalKeyboardListener()
@@ -189,7 +186,7 @@ program
   .option('--mode <mode>', 'dry-run|safe|live', 'dry-run')
   .action(async (routinePath, opts) => {
     if (!existsSync(routinePath)) {
-      logger.error('routine not found')
+      logger.error({ routinePath }, 'routine not found')
       process.exit(1)
     }
     const obj = YAML.parse(readFileSync(routinePath, 'utf8'))
@@ -197,45 +194,37 @@ program
       logger.error('routine marked unreviewed: true — review and remove flag first')
       process.exit(1)
     }
-    coerceLegacyPerception(obj)
-    const routine = Routine.parse(obj)
+    let routine: Routine
+    try {
+      routine = Routine.parse(obj)
+    } catch (err) {
+      logger.error({ err }, 'routine schema validation failed')
+      process.exit(1)
+    }
     const bus = new TypedBus()
     const clock = new RealClock()
     const backend = new ForegroundNutBackend()
     const cap = new ScreenshotDesktopCapture()
 
-    // Branch perception path on routine.perception.mode.
-    let yolo: YoloPerception | undefined
-    let templateLibrary: TemplateLibrary | undefined
-    let templateThreshold: number | undefined
-    let templateStride: number | undefined
-    let templateSearchRegion: Rect | undefined
-    if (routine.perception.mode === 'yolo') {
-      yolo = new YoloPerception({
-        modelPath: `models/${routine.perception.model}.onnx`,
-        classes: routine.perception.classes,
-        confidenceThreshold: routine.perception.confidence_threshold,
-      })
-      if (existsSync(`models/${routine.perception.model}.onnx`)) {
-        await yolo.load()
-      } else {
-        logger.warn('YOLO model missing — perception disabled')
-      }
-    } else {
-      // mode === 'template'
-      if (!existsSync(routine.perception.template_dir)) {
-        logger.error(`template_dir not found: ${routine.perception.template_dir}`)
-        process.exit(1)
-      }
-      templateLibrary = await TemplateLibrary.load(routine.perception.template_dir)
-      templateThreshold = routine.perception.match_threshold
-      templateStride = routine.perception.stride
-      templateSearchRegion = routine.perception.search_region
-      logger.info(
-        { templates: templateLibrary.size(), classes: templateLibrary.classes() },
-        'template library loaded',
+    if (!existsSync(routine.perception.template_dir)) {
+      logger.error(
+        { template_dir: routine.perception.template_dir },
+        'template_dir not found — run `import-sprites <map>` first',
       )
+      process.exit(1)
     }
+    const templateLibrary = await TemplateLibrary.load(routine.perception.template_dir)
+    const templateThreshold = routine.perception.match_threshold
+    const templateStride = routine.perception.stride
+    const templateSearchRegion = routine.perception.search_region
+    logger.info(
+      {
+        template_dir: routine.perception.template_dir,
+        templates: templateLibrary.size(),
+        classes: templateLibrary.classes(),
+      },
+      'template library loaded',
+    )
 
     const minimapColor = routine.minimap_player_color ?? {
       rgb: [240, 220, 60] as [number, number, number],
@@ -247,8 +236,6 @@ program
       matcher: minimapColor,
     })
 
-    // Reflex needs a reference to the Orchestrator's emergency-submit closure;
-    // we forward via a mutable holder so the Orchestrator can be constructed once.
     const emergency: { fn: (a: Action) => void } = { fn: () => {} }
     const reflex = new ReflexWorker({
       clock,
@@ -275,7 +262,6 @@ program
       backend,
       perception: { next: async () => null },
       getForegroundTitle: getForegroundWindowTitle,
-      yolo,
       capture: cap,
       reflex,
       minimap,
@@ -283,6 +269,7 @@ program
       templateThreshold,
       templateStride,
       templateSearchRegion,
+      combatAnchor: routine.perception.combat_anchor,
       bounds: routine.bounds
         ? {
             x: routine.bounds.x as [number, number],
@@ -304,7 +291,32 @@ program
       logger.warn({ action, err }, 'actuator: backend threw'),
     )
 
-    // Wire ReplayWriter — capture state/action/event stream for postmortem.
+    // 1 Hz state summary so users see life signs during a live run.
+    let lastSummaryAt = 0
+    let actionsSinceSummary = 0
+    bus.on('action.executed', () => {
+      actionsSinceSummary++
+    })
+    bus.on('state.built', (s: GameState) => {
+      const now = clock.now()
+      if (now - lastSummaryAt < 1000) return
+      lastSummaryAt = now
+      logger.info(
+        {
+          mobs: s.enemies.length,
+          mobsInRange300: s.enemies.filter((e) => e.distancePx <= 300).length,
+          playerPos: s.player.pos,
+          playerPosSource: s.player.posSource,
+          hp: Number(s.player.hp.toFixed(2)),
+          mp: Number(s.player.mp.toFixed(2)),
+          rune: s.flags.runeActive,
+          actionsLast1s: actionsSinceSummary,
+        },
+        'state',
+      )
+      actionsSinceSummary = 0
+    })
+
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     const replayDir = pathJoin('recordings', 'runs', stamp)
     const replay = new ReplayWriter(replayDir)
@@ -317,7 +329,7 @@ program
     logger.info({ replayDir }, 'replay artifact dir')
 
     hk.start()
-    logger.info(`running in ${opts.mode}. F10 pause, F12 abort`)
+    logger.info({ mode: opts.mode }, 'running. F10 pause, F12 abort')
     let consecutiveErrors = 0
     while (!stop) {
       if (o.isPaused()) {

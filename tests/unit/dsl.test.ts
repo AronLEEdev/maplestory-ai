@@ -4,7 +4,7 @@ import type { GameState } from '@/core/types'
 
 const state: GameState = {
   timestamp: 0,
-  player: { pos: { x: 100, y: 100 }, screenPos: { x: 100, y: 100 }, hp: 0.5, mp: 0.4 },
+  player: { pos: { x: 100, y: 100 }, screenPos: { x: 100, y: 100 }, posSource: 'detected', hp: 0.5, mp: 0.4 },
   enemies: [
     { type: 'mob_generic', pos: { x: 250, y: 100 }, distancePx: 150 },
     { type: 'mob_generic', pos: { x: 600, y: 100 }, distancePx: 500 },

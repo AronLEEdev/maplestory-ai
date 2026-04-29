@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --no-error-on-unmatched-pattern src tests",
-    "format": "prettier --write src tests"
+    "format": "prettier --write src tests",
+    "postinstall": "chmod +x node_modules/node-global-key-listener/bin/MacKeyServer 2>/dev/null; node -e \"const f=require('path').join('node_modules','sudo-prompt','index.js');let s=require('fs').readFileSync(f,'utf8');if(!s.includes('isObject:')){s=s.replace('util: require(\\'util\\')','util: {...require(\\'util\\'), isObject(a){return a!==null&&typeof a===\\'object\\'},isFunction(a){return typeof a===\\'function\\'}}');require('fs').writeFileSync(f,s)}\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
@@ -24,7 +25,6 @@
     "dotenv": "^17.4.2",
     "fastify": "^4.28.0",
     "node-global-key-listener": "^0.3.0",
-    "onnxruntime-node": "^1.18.0",
     "pino": "^9.0.0",
     "screenshot-desktop": "^1.15.0",
     "sharp": "^0.33.0",

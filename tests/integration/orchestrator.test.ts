@@ -15,7 +15,12 @@ const routine: Routine = {
     minimap: { x: 0, y: 0, w: 1, h: 1 },
   },
   reflex: [],
-  perception: { model: 'm', fps: 8, classes: ['player'], confidence_threshold: 0.5 },
+  perception: {
+    template_dir: 'data/templates/test',
+    fps: 12,
+    match_threshold: 0.75,
+    stride: 2,
+  },
   rotation: [
     { when: 'mobs_in_range(300) >= 1', action: { kind: 'press', key: 'ctrl' }, cooldown_ms: 0 },
   ],
@@ -29,7 +34,7 @@ const routine: Routine = {
 const stateStream: GameState[] = [
   {
     timestamp: 0,
-    player: { pos: { x: 0, y: 0 }, screenPos: { x: 0, y: 0 }, hp: 1, mp: 1 },
+    player: { pos: { x: 0, y: 0 }, screenPos: { x: 0, y: 0 }, posSource: 'detected', hp: 1, mp: 1 },
     enemies: [{ type: 'mob_generic', pos: { x: 100, y: 0 }, distancePx: 100 }],
     flags: { runeActive: false, outOfBounds: false },
     popup: null,

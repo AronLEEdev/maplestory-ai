@@ -29,7 +29,9 @@ export class ActionScheduler {
   constructor(opts: SchedulerOpts) {
     this.execute = opts.execute
     this.clock = opts.clock
-    this.perKeyCooldownMs = opts.perKeyCooldownMs ?? 200
+    // Default 80ms — comfortably below the run loop's 100ms tick interval so
+    // a routine emitting movement keys every tick isn't silently deduped.
+    this.perKeyCooldownMs = opts.perKeyCooldownMs ?? 80
     this.globalRate = opts.globalRateLimitPerSec ?? 20
   }
 

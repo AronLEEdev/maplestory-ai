@@ -9,24 +9,27 @@ export const ReflexEntry = z.object({
   action: Action,
 })
 
-export const PerceptionYolo = z.object({
-  mode: z.literal('yolo'),
-  model: z.string(),
-  fps: z.number().min(1).max(30),
-  classes: z.array(z.string()).min(1),
-  confidence_threshold: z.number().min(0).max(1),
+/**
+ * Optional combat anchor config used when no `player` template is detected.
+ * All fields default to neutral values; tune per-map for off-center cameras.
+ */
+export const CombatAnchor = z.object({
+  x_offset_from_center: z.number().default(0),
+  y_offset_from_center: z.number().default(0),
+  /** Mobs more than this many y-pixels from the anchor are flagged out of fight range. 0 disables. */
+  y_band: z.number().min(0).default(0),
+  metric: z.enum(['horizontal', 'euclidean']).default('horizontal'),
 })
+export type CombatAnchor = z.infer<typeof CombatAnchor>
 
-export const PerceptionTemplate = z.object({
-  mode: z.literal('template'),
+export const PerceptionConfig = z.object({
   template_dir: z.string(),
   fps: z.number().min(1).max(30),
   match_threshold: z.number().min(0).max(1).default(0.75),
   stride: z.number().int().min(1).max(8).default(2),
   search_region: Rect.optional(),
+  combat_anchor: CombatAnchor.optional(),
 })
-
-export const PerceptionConfig = z.discriminatedUnion('mode', [PerceptionYolo, PerceptionTemplate])
 
 export const RotationRule = z.union([
   z.object({
@@ -76,21 +79,6 @@ export const MinimapPlayerColor = z.object({
   rgb: z.tuple([z.number(), z.number(), z.number()]),
   tolerance: z.number(),
 })
-
-/**
- * Backward compat: v1 routines stored perception as a flat object without a
- * `mode` discriminator. Treat any such legacy block as `mode: 'yolo'`.
- *
- * Mutates `obj` in place and returns it. Callers should use this before
- * Routine.parse() when reading user-authored YAML/JSON.
- */
-export function coerceLegacyPerception<T extends Record<string, unknown>>(obj: T): T {
-  const p = (obj as { perception?: Record<string, unknown> }).perception
-  if (p && typeof p === 'object' && !p.mode) {
-    p.mode = 'yolo'
-  }
-  return obj
-}
 
 export const Routine = z.object({
   game: z.literal('maplestory'),

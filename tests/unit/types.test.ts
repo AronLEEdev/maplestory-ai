@@ -18,7 +18,7 @@ describe('zod schemas', () => {
   it('parses minimal GameState', () => {
     const s = GameState.parse({
       timestamp: 0,
-      player: { pos: null, screenPos: null, hp: 1, mp: 1 },
+      player: { pos: null, screenPos: null, posSource: 'anchor', hp: 1, mp: 1 },
       enemies: [],
       flags: { runeActive: false, outOfBounds: false },
       popup: null,

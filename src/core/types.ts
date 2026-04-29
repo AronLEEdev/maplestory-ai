@@ -44,11 +44,15 @@ export const EnemyState = z.object({
 })
 export type EnemyState = z.infer<typeof EnemyState>
 
+export const PosSource = z.enum(['detected', 'anchor', 'minimap'])
+export type PosSource = z.infer<typeof PosSource>
+
 export const GameState = z.object({
   timestamp: z.number(),
   player: z.object({
-    pos: Vec2.nullable(),         // minimap coords (canonical)
-    screenPos: Vec2.nullable(),   // YOLO bbox center (screen coords) for mob distance
+    pos: Vec2.nullable(),         // minimap coords (canonical for movement)
+    screenPos: Vec2.nullable(),   // screen-space anchor used for enemy distance
+    posSource: PosSource,         // how screenPos was derived this tick
     hp: z.number().min(0).max(1),
     mp: z.number().min(0).max(1),
   }),
