@@ -142,8 +142,11 @@ export class Orchestrator {
       const attackBandY = this.opts.templateAttackBandY
 
       // Hard cap on haystack long edge as a safety bound for unusually large
-      // game windows. Doesn't kick in for the typical 1900×1100 window.
-      const HAYSTACK_LONG_EDGE_CAP = 1500
+      // game windows. Set above typical retina game-window backing pixels
+      // (1918) so a Mac retina capture of a 1980-logical game window stays
+      // at native scale — any rescale here introduces a template/haystack
+      // scale mismatch and ZNCC scores collapse to noise.
+      const HAYSTACK_LONG_EDGE_CAP = 2400
       const baseW = region?.w ?? screenW
       const baseH = region?.h ?? screenH
       const longEdge = Math.max(baseW, baseH)

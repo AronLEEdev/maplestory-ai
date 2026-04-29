@@ -167,7 +167,12 @@ export async function orchestrateSave(
   const pc = opts.body.playerCrop
   if (gw || pc) {
     const ax = gw ? gw.x + gw.w / 2 : pc!.x + pc!.w / 2
-    const ay = pc ? pc.y + pc.h / 2 : gw!.y + gw!.h / 2
+    // Bias y toward player FEET (not chest center). Mob hitboxes' bbox
+    // centers sit at mob mid-height, but mushroom-class mobs are much
+    // shorter than the character — their centers land at ankle/foot level
+    // of the player. Anchoring at 75% of player crop height lines the
+    // y-band slab up with the mob row instead of the player's head.
+    const ay = pc ? pc.y + pc.h * 0.75 : gw!.y + gw!.h / 2
     combatAnchor = {
       x_offset_from_center: Math.round(ax - screenW / 2),
       y_offset_from_center: Math.round(ay - screenH / 2),
