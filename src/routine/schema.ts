@@ -26,10 +26,14 @@ export const PerceptionConfig = z.object({
   template_dir: z.string(),
   fps: z.number().min(1).max(30),
   match_threshold: z.number().min(0).max(1).default(0.75),
-  stride: z.number().int().min(1).max(8).default(2),
+  stride: z.number().int().min(1).max(16).default(2),
   /** Max detections per class per frame after NMS. Caps a noisy template
    *  from flooding the perception frame and freezing movement. */
   max_per_class: z.number().int().min(1).max(64).default(8),
+  /** When set, ZNCC scans only `[anchor_y - attack_band_y, anchor_y + attack_band_y]`
+   *  inside the search_region. Drastically cuts ZNCC ops so native-scale templates
+   *  fit the per-tick budget. ~120 px works for single-platform maps. */
+  attack_band_y: z.number().int().min(20).max(2000).optional(),
   search_region: Rect.optional(),
   combat_anchor: CombatAnchor.optional(),
 })

@@ -75,12 +75,18 @@ const DEFAULT_STOP_CONDITION = {
 
 const DEFAULT_PERCEPTION = {
   fps: 12,
-  // 0.55 filters noisier ZNCC hits from non-distinctive crops while still
-  // catching most real mobs at the 1000-px haystack scale.
-  match_threshold: 0.55,
-  stride: 4,
+  // v1.4: native-scale templates land at 60–120 px with rich texture.
+  // 0.65 separates real matches (typically 0.7–0.9) from noise (0.4–0.6).
+  match_threshold: 0.65,
+  // Stride 8 keeps the per-tick budget under control with native templates;
+  // a 6-px mob shift is fine, NMS smooths over coarse positions.
+  stride: 8,
   max_per_class: 8,
 }
+
+/** Default ±y px around the combat anchor that ZNCC scans. Crops the haystack
+ *  to a slab around the platform so native-scale matching fits the budget. */
+const DEFAULT_ATTACK_BAND_Y = 120
 
 function buildMovement(waypointXs: number[]) {
   if (waypointXs.length < 2) {
@@ -149,6 +155,10 @@ export function composeRoutine(
       template_dir: data.templateDir, // ALWAYS overwrite — calibrator owns this path
       ...((preserved.perception as Record<string, unknown>) ?? DEFAULT_PERCEPTION),
       ...(data.combatAnchor ? { combat_anchor: data.combatAnchor } : {}),
+      // v1.4 detection knobs — written every save so the runtime can crop
+      // the haystack to gameWindow + a y-band slab around the platform.
+      ...(data.gameWindow ? { search_region: data.gameWindow } : {}),
+      attack_band_y: DEFAULT_ATTACK_BAND_Y,
     },
     rotation: preserved.rotation ?? DEFAULT_ROTATION,
     movement: buildMovement(data.waypointXs),

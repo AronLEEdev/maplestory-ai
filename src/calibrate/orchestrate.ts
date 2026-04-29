@@ -78,10 +78,9 @@ export async function orchestrateSave(
     throw new Error('orchestrateSave: screenshot has no dimensions')
   }
 
-  // Runtime haystack scale factor — must match orchestrator.ts MAX_HAYSTACK_LONG_EDGE.
-  const longEdge = Math.max(screenW, screenH)
-  const runtimeScale =
-    opts.runtimeDownscale ?? (longEdge > 1000 ? longEdge / 1000 : 1)
+  // v1.4 templates land at native size. The orchestrator crops the haystack
+  // to the game-window rect so templates and haystack share scale.
+  const runtimeScale = 1
 
   // Sample player-dot RGB from the captured PNG at the user's click coord.
   const dotRgb = await sampleColor(opts.screenshotPng, opts.body.playerDotAt)
@@ -116,9 +115,12 @@ export async function orchestrateSave(
   }
   mkdirSync(spritesRawDir, { recursive: true })
 
-  // Save mob sprite crops, pre-downscaled to runtime haystack scale.
-  // Entries with rect=null come from a re-hydrated old calibration where the
-  // PNG already exists on disk; skip extraction and trust the existing file.
+  // Save mob sprite crops at native size. Entries with rect=null come from a
+  // re-hydrated old calibration where the PNG already exists on disk; skip
+  // extraction and trust the existing file.
+  const warnings: string[] = []
+  const TEMPLATE_MIN = 40
+  const TEMPLATE_MAX = 250
   const usedNames = new Set<string>()
   for (const crop of opts.body.mobCrops) {
     let name = sanitizeName(crop.name) || `mob${usedNames.size + 1}`
@@ -127,19 +129,19 @@ export async function orchestrateSave(
     if (!crop.rect) continue
     const dir = join(spritesRawDir, name)
     mkdirSync(dir, { recursive: true })
-    await extractAndSave(opts.screenshotPng, crop.rect, runtimeScale, join(dir, 'stand.png'))
+    const { w, h } = await extractAndSave(opts.screenshotPng, crop.rect, join(dir, 'stand.png'))
+    if (w < TEMPLATE_MIN || h < TEMPLATE_MIN) {
+      warnings.push(`${name}: ${w}×${h} is small — ZNCC may struggle. Recrop tighter or zoom in first.`)
+    } else if (w > TEMPLATE_MAX || h > TEMPLATE_MAX) {
+      warnings.push(`${name}: ${w}×${h} is large — slows detection. Crop one mob, not a region.`)
+    }
   }
 
   // Optional player crop.
   if (opts.body.playerCrop) {
     const dir = join(spritesRawDir, '_player')
     mkdirSync(dir, { recursive: true })
-    await extractAndSave(
-      opts.screenshotPng,
-      opts.body.playerCrop,
-      runtimeScale,
-      join(dir, 'stand.png'),
-    )
+    await extractAndSave(opts.screenshotPng, opts.body.playerCrop, join(dir, 'stand.png'))
   }
 
   // Generate the runtime template library.
@@ -213,7 +215,7 @@ export async function orchestrateSave(
     templatesDir,
     manifestPath: importSummary.manifestPath,
     templatesWritten: importSummary.variants,
-    warnings: importSummary.warnings,
+    warnings: [...importSummary.warnings, ...warnings],
   }
 }
 
@@ -238,28 +240,23 @@ export async function sampleColor(
 }
 
 /**
- * Crop a rect from the source PNG, downscale by the runtime factor, save as
- * PNG. Pre-downscaling here keeps the runtime template-match scale aligned
- * with the haystack downscale in orchestrator.ts.
+ * Crop a rect from the source PNG and save as PNG. Templates are kept at
+ * native (capture-backing-pixel) size — v1.4 dropped the pre-downscale that
+ * v1.3 used, because shrinking 90 px sprites to 30 px destroyed the texture
+ * ZNCC depends on. The runtime crops the haystack to the game-window region
+ * so templates and haystack stay scale-aligned at native size.
  */
 async function extractAndSave(
   png: Buffer,
   rect: Rect,
-  scale: number,
   outPath: string,
-): Promise<void> {
-  let pipeline = sharp(png).extract({
-    left: Math.max(0, Math.round(rect.x)),
-    top: Math.max(0, Math.round(rect.y)),
-    width: Math.max(1, Math.round(rect.w)),
-    height: Math.max(1, Math.round(rect.h)),
-  })
-  if (scale > 1) {
-    const newW = Math.max(1, Math.round(rect.w / scale))
-    const newH = Math.max(1, Math.round(rect.h / scale))
-    pipeline = pipeline.resize({ width: newW, height: newH, fit: 'fill' })
-  }
-  await pipeline.png().toFile(outPath)
+): Promise<{ w: number; h: number }> {
+  const left = Math.max(0, Math.round(rect.x))
+  const top = Math.max(0, Math.round(rect.y))
+  const width = Math.max(1, Math.round(rect.w))
+  const height = Math.max(1, Math.round(rect.h))
+  await sharp(png).extract({ left, top, width, height }).png().toFile(outPath)
+  return { w: width, h: height }
 }
 
 /** Sidecar path holding the full SaveBody from the last calibration of this map. */

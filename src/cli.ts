@@ -138,7 +138,13 @@ program
       }
     }
 
-    // 3. Copy each template + its dims into the inspect dir.
+    // 3. Copy each template + its dims into the inspect dir, AND run the
+     //    same detection pipeline the runtime uses so we can mark each
+     //    template's bestPos on full-annotated.png. Lets the user spot
+     //    "this template scored 0.42 because it's matching a stump that
+     //    isn't the sprite I cropped" at a glance.
+    type DiagOverlay = { class: string; variant: string; bestScore: number; bestPos: { x: number; y: number } | null; templateW: number; templateH: number }
+    const detectionDiags: DiagOverlay[] = []
     if (existsSync(routine.perception.template_dir)) {
       const lib = await TemplateLibrary.load(routine.perception.template_dir)
       const dims = lib.dims()
@@ -147,6 +153,54 @@ program
       const files = (await fs.readdir(tDir)).filter((f) => f.endsWith('.png'))
       for (const f of files) {
         await fs.copyFile(pathJoin(tDir, f), pathJoin(opts.out, `template-${f}`))
+      }
+
+      // Run the same crop+detect path as orchestrator.ts so bestPos is in
+      // the same coord space the runtime sees.
+      try {
+        const region = routine.perception.search_region
+        const attackBandY = routine.perception.attack_band_y
+        const anchor = routine.perception.combat_anchor
+        const anchorY = H / 2 + (anchor?.y_offset_from_center ?? 0)
+        const extractX = region?.x ?? 0
+        let extractY = region?.y ?? 0
+        const extractW = region?.w ?? W
+        let extractH = region?.h ?? H
+        if (attackBandY) {
+          const top = Math.max(extractY, Math.floor(anchorY - attackBandY))
+          const bot = Math.min(extractY + extractH, Math.ceil(anchorY + attackBandY))
+          if (bot > top) {
+            extractY = top
+            extractH = bot - top
+          }
+        }
+        const haystack = await sharp(png)
+          .extract({ left: extractX, top: extractY, width: extractW, height: extractH })
+          .removeAlpha()
+          .raw()
+          .toBuffer()
+        const { diag } = await lib.detectFrame(
+          haystack,
+          extractW,
+          extractH,
+          routine.perception.match_threshold,
+          routine.perception.stride,
+          routine.perception.max_per_class,
+        )
+        for (const d of diag) {
+          if (!d.bestPos) {
+            detectionDiags.push({ ...d })
+            continue
+          }
+          // Map bestPos from haystack-space back to display-space.
+          detectionDiags.push({
+            ...d,
+            bestPos: { x: d.bestPos.x + extractX, y: d.bestPos.y + extractY },
+          })
+        }
+        logger.info({ diag: detectionDiags }, 'inspect: per-template detection diag')
+      } catch (err) {
+        logger.warn({ err }, 'inspect: detection diag failed — overlay will skip per-template scores')
       }
     }
 
@@ -189,7 +243,29 @@ program
         <text x="${anchorX + 12}" y="${anchorY - 12}" font-size="18" fill="lime" font-family="sans-serif">combat anchor</text>
       `
 
-      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}${rangeSvg}${anchorSvg}</svg>`
+      // Per-template bestPos markers — yellow if score >= threshold, gray
+       // otherwise. Lets the user see where each template thinks its match
+       // is (or guess at why a template isn't firing).
+      const passColor = '#fc0'
+      const failColor = '#888'
+      const threshold = routine.perception.match_threshold
+      const tplSvg = detectionDiags
+        .filter((d) => d.bestPos)
+        .map((d) => {
+          const c = d.bestScore >= threshold ? passColor : failColor
+          const bx = d.bestPos!.x
+          const by = d.bestPos!.y
+          const bw = d.templateW
+          const bh = d.templateH
+          const stroke = d.bestScore >= threshold ? 4 : 2
+          return (
+            `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" stroke="${c}" stroke-width="${stroke}" stroke-dasharray="${d.bestScore >= threshold ? '' : '6,4'}" fill="none"/>` +
+            `<text x="${bx}" y="${by + bh + 20}" font-size="16" fill="${c}" font-family="sans-serif" font-weight="600">${d.class}/${d.variant} ${d.bestScore.toFixed(2)}</text>`
+          )
+        })
+        .join('\n')
+
+      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}${rangeSvg}${anchorSvg}${tplSvg}</svg>`
       await sharp(png)
         .composite([{ input: Buffer.from(overlay), top: 0, left: 0 }])
         .toFile(pathJoin(opts.out, 'full-annotated.png'))
@@ -214,11 +290,12 @@ Open in Finder / Preview:
   - cyan band         = mobs_in_range(N) rectangle (one per rotation rule)
                         should reach the mobs you intend to attack
   - red rectangles    = HP / MP / minimap regions; should hug each UI element
+  - yellow box        = template that PASSED threshold at its best position;
+                        check it actually overlaps a real mob sprite
+  - gray dashed box   = template that FAILED threshold — score listed; if a
+                        gray box is on top of the right sprite, raise tolerance
+                        or recrop tighter at higher zoom in calibrate
   - template-*.png      every template the runtime will match against
-
-If full.png doesn't show the game → capture is wrong (Mac Spaces issue or display perm)
-If region-hp.png is empty or shows wrong content → routine.regions.hp coords are wrong
-If templates look way smaller/larger than mobs in full.png → multi-scale mismatch
 `)
   })
 
@@ -529,6 +606,7 @@ program
     const templateStride = routine.perception.stride
     const templateSearchRegion = routine.perception.search_region
     const templateMaxPerClass = routine.perception.max_per_class
+    const templateAttackBandY = routine.perception.attack_band_y
     logger.info(
       {
         template_dir: routine.perception.template_dir,
@@ -582,6 +660,7 @@ program
       templateStride,
       templateMaxPerClass,
       templateSearchRegion,
+      templateAttackBandY,
       combatAnchor: routine.perception.combat_anchor,
       bounds: routine.bounds
         ? {

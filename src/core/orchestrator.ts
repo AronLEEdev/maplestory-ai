@@ -36,6 +36,10 @@ export interface OrchestratorOpts {
   templateStride?: number
   templateMaxPerClass?: number
   templateSearchRegion?: Rect
+  /** ±y px around the combat anchor's y to crop the haystack to. With
+   *  native-scale templates this slab cropping is what keeps ZNCC under
+   *  the per-tick budget. */
+  templateAttackBandY?: number
   combatAnchor?: CombatAnchorConfig
 }
 
@@ -125,39 +129,61 @@ export class Orchestrator {
       const tCapMs = this.opts.clock.now() - tCapStart
       log({ screenW, screenH, ms: this.opts.clock.now() - tSharp }, 'tick: sharp meta done')
 
-      // Template detection. Optionally crop to a search region first.
+      // Template detection.
+      // v1.4: crop the haystack to the gameWindow (search_region) and a
+      // y-band slab around the combat anchor's y. Templates and haystack
+      // both stay at native screen-backing-pixel scale, so ZNCC sees full
+      // sprite texture instead of a 30-px noise patch.
       const lib = this.opts.templateLibrary
       const region = this.opts.templateSearchRegion
       const threshold = this.opts.templateThreshold ?? 0.5
       const stride = this.opts.templateStride ?? 4
       const maxPerClass = this.opts.templateMaxPerClass ?? 8
+      const attackBandY = this.opts.templateAttackBandY
 
-      // Cap haystack longest edge to keep ZNCC tractable. Mac retina captures
-      // come back at backing pixels (e.g. 3024x1964 on a 14" MBP) which is
-      // ~17 MB raw — a full-screen ZNCC at 5 templates costs ~30 billion ops
-      // and freezes the main thread for minutes.
-      // Templates from maplestory.io are at native game sprite size (~60 px);
-      // downscaling the haystack to roughly the template scale also brings
-      // the rendered mob size down to template size, fixing the silent
-      // multi-scale mismatch that would otherwise return 0 detections.
-      const MAX_HAYSTACK_LONG_EDGE = 1000
-      const longEdge = Math.max(screenW, screenH)
-      const scale = longEdge > MAX_HAYSTACK_LONG_EDGE ? longEdge / MAX_HAYSTACK_LONG_EDGE : 1
+      // Hard cap on haystack long edge as a safety bound for unusually large
+      // game windows. Doesn't kick in for the typical 1900×1100 window.
+      const HAYSTACK_LONG_EDGE_CAP = 1500
+      const baseW = region?.w ?? screenW
+      const baseH = region?.h ?? screenH
+      const longEdge = Math.max(baseW, baseH)
+      const scale = longEdge > HAYSTACK_LONG_EDGE_CAP ? longEdge / HAYSTACK_LONG_EDGE_CAP : 1
 
-      let hw = screenW
-      let hh = screenH
-      const tDecode = this.opts.clock.now()
-      let pipeline = sharp(png)
-      if (region) {
-        pipeline = pipeline.extract({
-          left: region.x,
-          top: region.y,
-          width: region.w,
-          height: region.h,
-        })
-        hw = region.w
-        hh = region.h
+      // Compute the y-band crop window (in display-space coords) when
+      // attack_band_y is configured AND we have a combat-anchor y.
+      // anchorY is in full-display coords; the slab gets applied AFTER the
+      // search_region crop so we need to track region.y offsetting.
+      let bandTopGlobal = 0
+      let bandBottomGlobal = screenH
+      if (attackBandY && this.opts.combatAnchor) {
+        const anchorY = screenH / 2 + (this.opts.combatAnchor.y_offset_from_center ?? 0)
+        bandTopGlobal = Math.max(0, Math.floor(anchorY - attackBandY))
+        bandBottomGlobal = Math.min(screenH, Math.ceil(anchorY + attackBandY))
       }
+
+      // Combine search_region + y-band into a single extract rect (display-space).
+      const extractX = region?.x ?? 0
+      const extractW = region?.w ?? screenW
+      let extractY = region?.y ?? 0
+      let extractH = region?.h ?? screenH
+      if (attackBandY && this.opts.combatAnchor) {
+        const top = Math.max(extractY, bandTopGlobal)
+        const bot = Math.min(extractY + extractH, bandBottomGlobal)
+        if (bot > top) {
+          extractY = top
+          extractH = bot - top
+        }
+      }
+
+      let hw = extractW
+      let hh = extractH
+      const tDecode = this.opts.clock.now()
+      let pipeline = sharp(png).extract({
+        left: extractX,
+        top: extractY,
+        width: extractW,
+        height: extractH,
+      })
       if (scale > 1) {
         const newW = Math.floor(hw / scale)
         const newH = Math.floor(hh / scale)
@@ -167,7 +193,7 @@ export class Orchestrator {
       }
       const haystack: Buffer = await pipeline.removeAlpha().raw().toBuffer()
       log(
-        { hw, hh, bytes: haystack.length, scale, ms: this.opts.clock.now() - tDecode },
+        { hw, hh, bytes: haystack.length, scale, extractX, extractY, ms: this.opts.clock.now() - tDecode },
         'tick: sharp raw decode done',
       )
       const tDetStart = this.opts.clock.now()
@@ -192,20 +218,20 @@ export class Orchestrator {
         }
       }
       // Map detection bboxes back into native screen coordinates.
-      if (scale !== 1 || region) {
-        frame = {
-          ...frame,
-          detections: frame.detections.map((d) => {
-            const [x, y, w, h] = d.bbox
-            const nx = x * scale + (region?.x ?? 0)
-            const ny = y * scale + (region?.y ?? 0)
-            return {
-              ...d,
-              bbox: [nx, ny, w * scale, h * scale] as [number, number, number, number],
-            }
-          }),
-          screenshotMeta: { width: screenW, height: screenH },
-        }
+      // The extract uses (extractX, extractY) as origin and scale is applied
+      // uniformly, so reverse both transforms here.
+      frame = {
+        ...frame,
+        detections: frame.detections.map((d) => {
+          const [x, y, w, h] = d.bbox
+          const nx = x * scale + extractX
+          const ny = y * scale + extractY
+          return {
+            ...d,
+            bbox: [nx, ny, w * scale, h * scale] as [number, number, number, number],
+          }
+        }),
+        screenshotMeta: { width: screenW, height: screenH },
       }
 
       this.opts.bus.emit('perception.tick', {
