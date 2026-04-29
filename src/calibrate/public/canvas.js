@@ -61,27 +61,98 @@ const btnZoomFit = document.getElementById('btn-zoom-fit')
 const btnZoom1 = document.getElementById('btn-zoom-1')
 const btnHand = document.getElementById('btn-hand')
 
-// ── Bootstrap: load the screenshot ───────────────────────────────────────
+// ── Bootstrap: load the screenshot + any existing calibration ────────────
 const img = new Image()
-img.onload = () => {
+img.onload = async () => {
   state.img = img
-  // Set the canvas to viewport size; image is panned/zoomed inside.
   resizeCanvas()
-  // Build a hidden pixel-read canvas at native image resolution.
   state.pixelCanvas = document.createElement('canvas')
   state.pixelCanvas.width = img.width
   state.pixelCanvas.height = img.height
   state.pixelCtx = state.pixelCanvas.getContext('2d', { willReadFrequently: true })
   state.pixelCtx.drawImage(img, 0, 0)
   fitToWindow()
+  await hydrateFromExisting()
   redraw()
   updateUI()
 }
 img.src = '/screenshot.png'
 
+// Pull last-saved SaveBody from the server and prefill state. Lets the user
+// edit a single step instead of redoing every step on recalibrate.
+async function hydrateFromExisting() {
+  try {
+    const resp = await fetch('/existing')
+    if (!resp.ok) return
+    const data = await resp.json()
+    if (!data.ok || !data.body) return
+    const b = data.body
+    state.windowTitle = b.windowTitle ?? state.windowTitle
+    state.gameWindow = b.gameWindow ?? null
+    state.regions = {
+      hp: b.regions?.hp ?? null,
+      mp: b.regions?.mp ?? null,
+      minimap: b.regions?.minimap ?? null,
+    }
+    state.playerDotAt = b.playerDotAt ?? null
+    if (b.playerDotAt && state.pixelCtx) {
+      const ix = Math.max(0, Math.min(state.img.width - 1, Math.round(b.playerDotAt.x)))
+      const iy = Math.max(0, Math.min(state.img.height - 1, Math.round(b.playerDotAt.y)))
+      const d = state.pixelCtx.getImageData(ix, iy, 1, 1).data
+      state.playerDotRgb = [d[0], d[1], d[2]]
+    }
+    state.bounds = b.bounds ?? null
+    state.waypointXs = Array.isArray(b.waypointXs) ? [...b.waypointXs] : []
+    state.mobCrops = Array.isArray(b.mobCrops) ? b.mobCrops.map((m) => ({ ...m })) : []
+    if (b.playerCrop) {
+      // Carry the player crop in mobCrops with the reserved name `_player`
+      // so the existing UI controls (rename / unmark / remove) work uniformly.
+      state.mobCrops.push({ name: '_player', rect: b.playerCrop })
+    }
+    // Move past the points step if all sub-points already captured.
+    state.pointPhase =
+      state.playerDotAt && state.bounds?.bottomRight ? 3 + state.waypointXs.length : 0
+    if (data.resolution) {
+      const [rw, rh] = data.resolution
+      if (rw !== state.img.width || rh !== state.img.height) {
+        const banner = document.getElementById('instr-hint')
+        if (banner) {
+          banner.innerHTML =
+            `<span style="color:#fa5">⚠ existing calibration is from ${rw}×${rh}; current screenshot is ${state.img.width}×${state.img.height}. Rectangles may be off.</span>`
+        }
+      }
+    }
+  } catch {
+    /* fall through to fresh wizard */
+  }
+}
+
 window.addEventListener('resize', () => {
   resizeCanvas()
   redraw()
+})
+
+// Click any step pill to jump to that step. Lets the user edit one piece of
+// the calibration without re-walking the whole wizard.
+stepIndicator.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-step-idx]')
+  if (!t) return
+  const idx = Number(t.dataset.stepIdx)
+  if (Number.isFinite(idx) && idx >= 0 && idx < STEPS.length) {
+    state.stepIdx = idx
+    if (STEPS[idx].id === 'minimap-points') {
+      // Resume points sub-wizard at the next missing piece.
+      state.pointPhase = !state.playerDotAt
+        ? 0
+        : !state.bounds?.topLeft
+          ? 1
+          : !state.bounds?.bottomRight
+            ? 2
+            : 3 + state.waypointXs.length
+    }
+    redraw()
+    updateUI()
+  }
 })
 
 function resizeCanvas() {
@@ -588,12 +659,28 @@ async function registerPoint(ix, iy) {
   }
 }
 
+// Returns true when the step has captured data — used to show "done" pill
+// even after re-hydration where stepIdx is 0 but earlier steps already have data.
+function stepHasData(stepId) {
+  if (stepId === 'window') return !!state.gameWindow
+  if (stepId === 'hp' || stepId === 'mp' || stepId === 'minimap') return !!state.regions[stepId]
+  if (stepId === 'minimap-points')
+    return (
+      !!state.playerDotAt &&
+      !!state.bounds?.bottomRight &&
+      state.waypointXs.length >= 2
+    )
+  if (stepId === 'mobs') return state.mobCrops.length > 0
+  return false
+}
+
 // ── UI updates ───────────────────────────────────────────────────────────
 function updateUI() {
   const step = STEPS[state.stepIdx]
   stepIndicator.innerHTML = STEPS.map((s, i) => {
-    const cls = i < state.stepIdx ? 'done' : i === state.stepIdx ? 'active' : ''
-    return `<span class="step ${cls}">${s.label}</span>`
+    const has = stepHasData(s.id)
+    const cls = i === state.stepIdx ? 'active' : has ? 'done' : ''
+    return `<span class="step ${cls}" data-step-idx="${i}" role="button">${s.label}${has && i !== state.stepIdx ? ' ✓' : ''}</span>`
   }).join('')
 
   if (step.id === 'window') {

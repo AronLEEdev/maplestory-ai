@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { logger } from '@/core/logger'
@@ -167,6 +167,16 @@ export async function orchestrateSave(
   }
   writeRoutine({ routinePath, data: calibrationData })
 
+  // Sidecar JSON: full SaveBody + capture resolution. Lets a future
+  // `calibrate <map>` re-hydrate the wizard so the user can edit one step
+  // instead of redoing everything.
+  const sidecarPath = sidecarPathFor(routinesDir, map)
+  mkdirSync(join(routinesDir, '.calibrate'), { recursive: true })
+  writeFileSync(
+    sidecarPath,
+    JSON.stringify({ resolution: [screenW, screenH], body: opts.body }, null, 2),
+  )
+
   logger.info(
     {
       routinePath,
@@ -230,6 +240,29 @@ async function extractAndSave(
     pipeline = pipeline.resize({ width: newW, height: newH, fit: 'fill' })
   }
   await pipeline.png().toFile(outPath)
+}
+
+/** Sidecar path holding the full SaveBody from the last calibration of this map. */
+export function sidecarPathFor(routinesDir: string, map: string): string {
+  return join(routinesDir, '.calibrate', `${map}.json`)
+}
+
+/**
+ * Read the saved SaveBody for a previously-calibrated map, if any. Returns
+ * null when no sidecar exists (first calibration) or on parse failure.
+ */
+export function loadExistingCalibration(
+  routinesDir: string,
+  map: string,
+): { resolution: [number, number]; body: SaveBody } | null {
+  const path = sidecarPathFor(routinesDir, map)
+  if (!existsSync(path)) return null
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch (err) {
+    logger.warn({ err, path }, 'calibrate: sidecar parse failed — treating as fresh')
+    return null
+  }
 }
 
 function sanitizeName(s: string): string {

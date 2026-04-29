@@ -4,7 +4,13 @@ import { readFileSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { logger } from '@/core/logger'
-import { orchestrateSave, sampleColor, type SaveBody, type OrchestrateResult } from './orchestrate'
+import {
+  orchestrateSave,
+  sampleColor,
+  loadExistingCalibration,
+  type SaveBody,
+  type OrchestrateResult,
+} from './orchestrate'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -67,6 +73,15 @@ export async function startCalibrateServer(opts: ServerOpts): Promise<ServerHand
     else if (filename.endsWith('.css')) reply.type('text/css')
     else if (filename.endsWith('.png')) reply.type('image/png')
     return readFileSync(path)
+  })
+
+  fastify.get('/existing', async (_req, reply) => {
+    const data = loadExistingCalibration('routines', opts.map)
+    if (!data) {
+      reply.code(404)
+      return { ok: false }
+    }
+    return { ok: true, ...data }
   })
 
   fastify.post<{ Body: { x: number; y: number } }>('/sample-color', async (req) => {

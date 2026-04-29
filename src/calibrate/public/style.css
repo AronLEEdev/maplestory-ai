@@ -32,6 +32,11 @@ header h1 {
   margin-right: 4px;
   border-radius: 10px;
   background: #222;
+  cursor: pointer;
+  user-select: none;
+}
+#step-indicator .step:hover {
+  background: #333;
 }
 #step-indicator .step.active {
   background: #4a8;
