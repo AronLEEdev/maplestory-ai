@@ -1,10 +1,46 @@
 # maplestory.ai
 
-Record yourself farming a Maplestory map, let an LLM analyze it, replay the routine on demand.
+Maplestory farming co-pilot. v2 architecture: minimap-based navigation +
+YOLOv8 detection for player/mob recognition.
+
+> **Branch status**: `main` holds the v1.4.1 ZNCC-based pipeline (tagged
+> `v1.4.1-final`). Active development is on `v2-yolo` where ZNCC was
+> replaced with a YOLOv8 ONNX detector. The v2 README sections below are
+> the source of truth — older sections describing the recording/analyze
+> flow are stale and will be rewritten once v2 ships end-to-end.
+
+## v2 workflow (Henesys, one-map-at-a-time)
+
+```bash
+# 1. One-time calibration (regions, minimap, bounds, waypoints):
+npm run dev -- calibrate henesys
+
+# 2. Capture training frames while playing normally:
+npm run dev -- capture henesys --duration 10m --fps 2 --routine routines/henesys.yaml
+
+# 3. Label player + mob bounding boxes in the browser:
+npm run dev -- label henesys
+
+# 4. Train + export the YOLO model (Python toolchain):
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r python/requirements.txt
+python python/train.py henesys --epochs 80 --device mps
+python python/export_onnx.py henesys
+
+# 5. Run the bot:
+npm run dev -- run routines/henesys.yaml --mode dry-run
+npm run dev -- run routines/henesys.yaml --mode safe
+npm run dev -- run routines/henesys.yaml --mode live
+```
+
+See `python/README.md` for training details and hard-negative tips.
 
 ## Stack
 
-TypeScript + Node 18+ / npm. YOLOv8 ONNX for object detection, sharp for image, nut.js for input, screenshot-desktop for capture, Anthropic SDK for offline routine analysis.
+TypeScript + Node 18+ / npm. onnxruntime-node for inference, sharp for
+image, nut.js for input, screenshot-desktop for capture, fastify for the
+calibrator + labeler servers. Python (Ultralytics + ONNX) is used at
+training time only — never at runtime.
 
 ## Quickstart
 
