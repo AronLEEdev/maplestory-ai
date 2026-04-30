@@ -122,9 +122,37 @@ program
       }
     }
 
-    // 4. Annotated full-frame: overlay region rectangles. v2 inspect is
-    //    minimal — YOLO detection visualization will land alongside the
-    //    inference module in phase 5b.
+    // 4. Run YOLO once (if model exists) and overlay detections + regions.
+    type DetVis = { class: string; bbox: [number, number, number, number]; confidence: number }
+    let yoloDets: DetVis[] = []
+    let yoloMs = 0
+    if (routine.perception.model_path && existsSync(routine.perception.model_path)) {
+      try {
+        const { YoloDetector } = await import('@/perception/yolo')
+        const det = new YoloDetector({
+          modelPath: routine.perception.model_path,
+          confidenceThreshold: routine.perception.confidence_threshold,
+        })
+        const t0 = Date.now()
+        const gw = obj.game_window as Rect | undefined
+        yoloDets = await det.detect(png, gw)
+        yoloMs = Date.now() - t0
+        logger.info(
+          { detections: yoloDets.length, ms: yoloMs },
+          'inspect: YOLO detection done',
+        )
+      } catch (err) {
+        logger.warn({ err }, 'inspect: YOLO inference failed — overlay will skip detections')
+      }
+    } else {
+      logger.warn(
+        { modelPath: routine.perception.model_path },
+        'inspect: no model_path or file missing — skipping YOLO overlay',
+      )
+    }
+
+    // 5. Annotated full-frame: regions in red, YOLO mob detections in
+    //    cyan, YOLO player detection in lime.
     try {
       const svgRects = (Object.entries(routine.regions) as [string, Rect][])
         .filter(([, r]) => r != null)
@@ -133,11 +161,22 @@ program
         })
         .join('\n')
 
-      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}</svg>`
+      const detSvg = yoloDets
+        .map((d) => {
+          const color = d.class === 'player' ? '#7f7' : '#0ff'
+          const [x, y, w, h] = d.bbox
+          return (
+            `<rect x="${x}" y="${y}" width="${w}" height="${h}" stroke="${color}" stroke-width="3" fill="none"/>` +
+            `<text x="${x}" y="${y + h + 18}" font-size="14" fill="${color}" font-family="ui-monospace, monospace" font-weight="600">${d.class} ${d.confidence.toFixed(2)}</text>`
+          )
+        })
+        .join('\n')
+
+      const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${svgRects}${detSvg}</svg>`
       await sharp(png)
         .composite([{ input: Buffer.from(overlay), top: 0, left: 0 }])
         .toFile(pathJoin(opts.out, 'full-annotated.png'))
-      logger.info('wrote full-annotated.png — open it to verify region rectangles')
+      logger.info('wrote full-annotated.png')
     } catch (err) {
       logger.warn({ err }, 'annotated overlay failed')
     }
@@ -147,23 +186,16 @@ inspect output → ${opts.out}/
 
 Open in Finder / Preview:
   - full.png            full screen capture (look at this first — does it show the GAME?)
-  - full-annotated.png  same image with routine.regions overlayed in red rectangles
+  - full-annotated.png  capture with overlays
   - region-hp.png       cropped HP bar (should look like a red bar)
   - region-mp.png       cropped MP bar (should look like a blue bar)
   - region-minimap.png  cropped minimap (should look like the minimap)
 
-  In full-annotated.png also check:
-  - lime crosshair    = combat anchor (where the bot measures mob distance from)
-                        should sit ON or very near your character
-  - cyan band         = mobs_in_range(N) rectangle (one per rotation rule)
-                        should reach the mobs you intend to attack
-  - red rectangles    = HP / MP / minimap regions; should hug each UI element
-  - yellow box        = template that PASSED threshold at its best position;
-                        check it actually overlaps a real mob sprite
-  - gray dashed box   = template that FAILED threshold — score listed; if a
-                        gray box is on top of the right sprite, raise tolerance
-                        or recrop tighter at higher zoom in calibrate
-  - template-*.png      every template the runtime will match against
+  In full-annotated.png:
+  - red rectangles  = HP / MP / minimap regions; should hug each UI element
+  - lime box        = YOLO player detection (with confidence label)
+  - cyan box        = YOLO mob detection (with confidence label)
+  YOLO ran in ${yoloMs} ms, ${yoloDets.length} detections (model: ${routine.perception.model_path ?? 'absent'})
 `)
   })
 
@@ -573,9 +605,30 @@ program
     const backend = new ForegroundNutBackend()
     const cap = new ScreenshotDesktopCapture()
 
-    // v2: YOLO inference module hooks in here in phase 5b. Phase 1 leaves
-    // the perception pipeline empty — orchestrator runs minimap + reflex
-    // only, no template loading.
+    // v2 perception: load YOLO weights pointed at by routine.perception.model_path
+    // (relative to cwd). Missing/broken file falls back to "stub mode" — runtime
+    // emits empty detections per tick so movement + reflex still drive the bot.
+    let yolo: import('@/perception/yolo').YoloDetector | undefined
+    if (routine.perception.model_path && existsSync(routine.perception.model_path)) {
+      const { YoloDetector } = await import('@/perception/yolo')
+      yolo = new YoloDetector({
+        modelPath: routine.perception.model_path,
+        confidenceThreshold: routine.perception.confidence_threshold,
+      })
+      try {
+        await yolo.load()
+        logger.info({ modelPath: routine.perception.model_path }, 'yolo: ready')
+      } catch (err) {
+        logger.warn({ err, modelPath: routine.perception.model_path }, 'yolo: load failed — running in stub mode (no detections)')
+        yolo = undefined
+      }
+    } else {
+      logger.warn(
+        { modelPath: routine.perception.model_path },
+        'yolo: no model_path or file missing — running in stub mode (no detections)',
+      )
+    }
+    const gameWindowFromYaml = (obj.game_window as Rect | undefined) ?? undefined
 
     const minimapColor = routine.minimap_player_color ?? {
       rgb: [240, 220, 60] as [number, number, number],
@@ -616,6 +669,8 @@ program
       capture: cap,
       reflex,
       minimap,
+      yolo,
+      gameWindow: gameWindowFromYaml,
       bounds: routine.bounds
         ? {
             x: routine.bounds.x as [number, number],
@@ -675,12 +730,16 @@ program
       lastSummaryAt = now
       logger.info(
         {
-          mobs: s.enemies.length,
-          mobsInRange300: s.enemies.filter((e) => e.distancePx <= 300).length,
-          playerPos: s.player.pos,
-          playerPosSource: s.player.posSource,
-          hp: Number(s.player.hp.toFixed(2)),
-          mp: Number(s.player.mp.toFixed(2)),
+          mobs: s.combat.mobs.length,
+          mobsLeft: s.combat.mobsLeft,
+          mobsRight: s.combat.mobsRight,
+          nearestMobDx: s.combat.nearestMobDx,
+          playerScreenPos: s.combat.playerScreenPos,
+          playerScreenSource: s.combat.playerScreenSource,
+          minimapPos: s.nav.playerMinimapPos,
+          boundsOk: s.nav.boundsOk,
+          hp: Number(s.vitals.hp.toFixed(2)),
+          mp: Number(s.vitals.mp.toFixed(2)),
           rune: s.flags.runeActive,
           actionsLast1s: { ...counts },
           perception: lastPerceptionTick,

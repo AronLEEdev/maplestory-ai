@@ -16,10 +16,9 @@ const routine: Routine = {
   },
   reflex: [],
   perception: {
-    template_dir: 'data/templates/test',
-    fps: 12,
-    match_threshold: 0.75,
-    stride: 2,
+    model_path: 'data/models/test.onnx',
+    fps: 8,
+    confidence_threshold: 0.5,
   },
   rotation: [
     { when: 'mobs_in_range(300) >= 1', action: { kind: 'press', key: 'ctrl' }, cooldown_ms: 0 },
@@ -34,9 +33,24 @@ const routine: Routine = {
 const stateStream: GameState[] = [
   {
     timestamp: 0,
-    player: { pos: { x: 0, y: 0 }, screenPos: { x: 0, y: 0 }, posSource: 'detected', hp: 1, mp: 1 },
-    enemies: [{ type: 'mob_generic', pos: { x: 100, y: 0 }, distancePx: 100 }],
-    flags: { runeActive: false, outOfBounds: false },
+    nav: { playerMinimapPos: { x: 0, y: 0 }, boundsOk: true },
+    combat: {
+      playerScreenPos: { x: 0, y: 0 },
+      playerScreenSource: 'detected',
+      mobs: [
+        {
+          bbox: { x: 75, y: -25, w: 50, h: 50 },
+          center: { x: 100, y: 0 },
+          confidence: 0.9,
+        },
+      ],
+      nearestMobDx: 100,
+      mobsLeft: 0,
+      mobsRight: 1,
+      confidenceOk: true,
+    },
+    vitals: { hp: 1, mp: 1 },
+    flags: { runeActive: false },
     popup: null,
   },
 ]

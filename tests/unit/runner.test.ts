@@ -14,7 +14,7 @@ const routine: Routine = {
     minimap: { x: 0, y: 0, w: 1, h: 1 },
   },
   reflex: [],
-  perception: { model: 'm', fps: 8, classes: ['player'], confidence_threshold: 0.5 },
+  perception: { model_path: 'data/models/x.onnx', fps: 8, confidence_threshold: 0.5 },
   rotation: [
     { when: 'mobs_in_range(300) >= 1', action: { kind: 'press', key: 'ctrl' }, cooldown_ms: 500 },
     { every: '30s', action: { kind: 'press', key: 'shift' } },
@@ -27,14 +27,31 @@ const routine: Routine = {
 }
 
 function stateWithMobs(distance: number, playerX = 0): GameState {
+  const playerScreenPos = { x: playerX, y: 0 }
+  const mobs =
+    distance >= 0
+      ? [
+          {
+            bbox: { x: playerX + distance - 25, y: -25, w: 50, h: 50 },
+            center: { x: playerX + distance, y: 0 },
+            confidence: 0.9,
+          },
+        ]
+      : []
   return {
     timestamp: 0,
-    player: { pos: { x: playerX, y: 0 }, screenPos: { x: playerX, y: 0 }, posSource: 'detected', hp: 1, mp: 1 },
-    enemies:
-      distance >= 0
-        ? [{ type: 'mob_generic', pos: { x: playerX + distance, y: 0 }, distancePx: distance }]
-        : [],
-    flags: { runeActive: false, outOfBounds: false },
+    nav: { playerMinimapPos: { x: playerX, y: 0 }, boundsOk: true },
+    combat: {
+      playerScreenPos,
+      playerScreenSource: 'detected',
+      mobs,
+      nearestMobDx: distance >= 0 ? distance : null,
+      mobsLeft: distance < 0 ? 0 : distance < 0 ? 1 : 0,
+      mobsRight: distance >= 0 ? 1 : 0,
+      confidenceOk: true,
+    },
+    vitals: { hp: 1, mp: 1 },
+    flags: { runeActive: false },
     popup: null,
   }
 }
@@ -96,9 +113,24 @@ describe('RoutineRunner', () => {
     // Mob to the LEFT of player (player at x=500, mob at x=200) → face left.
     const left: GameState = {
       timestamp: 0,
-      player: { pos: { x: 0, y: 0 }, screenPos: { x: 500, y: 0 }, posSource: 'detected', hp: 1, mp: 1 },
-      enemies: [{ type: 'mob_x', pos: { x: 200, y: 0 }, distancePx: 100 }],
-      flags: { runeActive: false, outOfBounds: false },
+      nav: { playerMinimapPos: { x: 0, y: 0 }, boundsOk: true },
+      combat: {
+        playerScreenPos: { x: 500, y: 0 },
+        playerScreenSource: 'detected',
+        mobs: [
+          {
+            bbox: { x: 175, y: -25, w: 50, h: 50 },
+            center: { x: 200, y: 0 },
+            confidence: 0.9,
+          },
+        ],
+        nearestMobDx: -300,
+        mobsLeft: 1,
+        mobsRight: 0,
+        confidenceOk: true,
+      },
+      vitals: { hp: 1, mp: 1 },
+      flags: { runeActive: false },
       popup: null,
     }
     r.tick(left)

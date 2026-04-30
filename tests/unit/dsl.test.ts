@@ -4,12 +4,29 @@ import type { GameState } from '@/core/types'
 
 const state: GameState = {
   timestamp: 0,
-  player: { pos: { x: 100, y: 100 }, screenPos: { x: 100, y: 100 }, posSource: 'detected', hp: 0.5, mp: 0.4 },
-  enemies: [
-    { type: 'mob_generic', pos: { x: 250, y: 100 }, distancePx: 150 },
-    { type: 'mob_generic', pos: { x: 600, y: 100 }, distancePx: 500 },
-  ],
-  flags: { runeActive: false, outOfBounds: false },
+  nav: { playerMinimapPos: { x: 100, y: 100 }, boundsOk: true },
+  combat: {
+    playerScreenPos: { x: 100, y: 100 },
+    playerScreenSource: 'detected',
+    mobs: [
+      {
+        bbox: { x: 225, y: 75, w: 50, h: 50 },
+        center: { x: 250, y: 100 },
+        confidence: 0.9,
+      },
+      {
+        bbox: { x: 575, y: 75, w: 50, h: 50 },
+        center: { x: 600, y: 100 },
+        confidence: 0.85,
+      },
+    ],
+    nearestMobDx: 150,
+    mobsLeft: 0,
+    mobsRight: 2,
+    confidenceOk: true,
+  },
+  vitals: { hp: 0.5, mp: 0.4 },
+  flags: { runeActive: false },
   popup: null,
 }
 

@@ -15,15 +15,25 @@ describe('zod schemas', () => {
     expect(() => Action.parse({ kind: 'bogus' })).toThrow()
   })
 
-  it('parses minimal GameState', () => {
+  it('parses minimal v2 dual-channel GameState', () => {
     const s = GameState.parse({
       timestamp: 0,
-      player: { pos: null, screenPos: null, posSource: 'anchor', hp: 1, mp: 1 },
-      enemies: [],
-      flags: { runeActive: false, outOfBounds: false },
+      nav: { playerMinimapPos: null, boundsOk: true },
+      combat: {
+        playerScreenPos: null,
+        playerScreenSource: 'fallback',
+        mobs: [],
+        nearestMobDx: null,
+        mobsLeft: 0,
+        mobsRight: 0,
+        confidenceOk: false,
+      },
+      vitals: { hp: 1, mp: 1 },
+      flags: { runeActive: false },
       popup: null,
     })
-    expect(s.player.hp).toBe(1)
+    expect(s.vitals.hp).toBe(1)
+    expect(s.combat.confidenceOk).toBe(false)
   })
 
   it('parses minimal PerceptionFrame', () => {

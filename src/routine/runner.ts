@@ -83,17 +83,18 @@ export class RoutineRunner {
       if (r.action.kind === 'attack_facing') {
         const action = r.action
         // Direction priority:
-        //  1. detected player template + nearest mob.x compare (most accurate)
-        //  2. movement FSM's intended direction toward the next waypoint
-        //     (robust when the player template is missing — the common case)
-        //  3. last-walked direction
-        const player = state.player.screenPos
-        const nearest = state.enemies[0]
+        //  1. detected player + nearest mob.x compare (most accurate; YOLO
+        //     gave us a real screen anchor).
+        //  2. tracked player + nearest mob (short-term reuse during occlusion).
+        //  3. movement FSM's intended walk direction.
+        //  4. last-walked direction.
+        const player = state.combat.playerScreenPos
+        const nearest = state.combat.mobs[0]
         let dir: 'left' | 'right' | null = null
-        if (state.player.posSource === 'detected' && player && nearest) {
-          dir = nearest.pos.x < player.x ? 'left' : 'right'
+        if (state.combat.confidenceOk && player && nearest) {
+          dir = nearest.center.x < player.x ? 'left' : 'right'
         } else {
-          const playerX = state.player.pos?.x ?? 0
+          const playerX = state.nav.playerMinimapPos?.x ?? 0
           dir = this.fsm.intendedDir(playerX) ?? this.fsm.lastDir()
         }
         if (dir) {
@@ -107,7 +108,7 @@ export class RoutineRunner {
       break
     }
     if (!attacked) {
-      const px = state.player.pos?.x ?? 0
+      const px = state.nav.playerMinimapPos?.x ?? 0
       this.fsm.tick({ playerX: px, attacking: attacked }, this.emit)
     }
   }

@@ -37,27 +37,61 @@ export const PopupState = z.object({
 })
 export type PopupState = z.infer<typeof PopupState>
 
-export const EnemyState = z.object({
-  type: z.string(),
-  pos: Vec2,
-  distancePx: z.number(),
+/**
+ * v2 detected-mob entry. The `class` is implicit ("mob"); we don't carry
+ * species since the detector is two-class only.
+ */
+export const MobState = z.object({
+  /** Bbox in display-space pixels. */
+  bbox: Rect,
+  /** Bbox center, display-space. */
+  center: Vec2,
+  /** YOLO confidence [0, 1]. */
+  confidence: z.number().min(0).max(1),
 })
-export type EnemyState = z.infer<typeof EnemyState>
+export type MobState = z.infer<typeof MobState>
 
-export const PosSource = z.enum(['detected', 'anchor', 'minimap'])
-export type PosSource = z.infer<typeof PosSource>
+/** How the player's on-screen position was determined this tick. */
+export const PlayerScreenSource = z.enum(['detected', 'tracked', 'fallback'])
+export type PlayerScreenSource = z.infer<typeof PlayerScreenSource>
 
+/**
+ * v2 dual-channel runtime state.
+ *
+ * - `nav`: minimap-derived. Authoritative for movement and bounds.
+ * - `combat`: YOLO-derived. Authoritative for attack decisions.
+ * - `vitals` and `flags` are independent samples.
+ *
+ * The two channels never need to agree on a single "player position";
+ * the calling code picks the right channel per question.
+ */
 export const GameState = z.object({
   timestamp: z.number(),
-  player: z.object({
-    pos: Vec2.nullable(),         // minimap coords (canonical for movement)
-    screenPos: Vec2.nullable(),   // screen-space anchor used for enemy distance
-    posSource: PosSource,         // how screenPos was derived this tick
+  nav: z.object({
+    /** Player position in minimap-local coords. null when not detected this tick. */
+    playerMinimapPos: Vec2.nullable(),
+    /** False when minimap pos is outside the configured bounds + margin. */
+    boundsOk: z.boolean(),
+  }),
+  combat: z.object({
+    /** Player center in display-space pixels. null when no detection and tracker exhausted. */
+    playerScreenPos: Vec2.nullable(),
+    playerScreenSource: PlayerScreenSource,
+    /** Mobs detected this tick, sorted by horizontal distance to playerScreenPos. */
+    mobs: z.array(MobState),
+    /** Signed dx of the nearest mob center from playerScreenPos. <0=left, >0=right. */
+    nearestMobDx: z.number().nullable(),
+    /** Counts split by side relative to playerScreenPos. */
+    mobsLeft: z.number().int().min(0),
+    mobsRight: z.number().int().min(0),
+    /** True when playerScreenPos came from `detected` or `tracked` (not `fallback`). */
+    confidenceOk: z.boolean(),
+  }),
+  vitals: z.object({
     hp: z.number().min(0).max(1),
     mp: z.number().min(0).max(1),
   }),
-  enemies: z.array(EnemyState),
-  flags: z.object({ runeActive: z.boolean(), outOfBounds: z.boolean() }),
+  flags: z.object({ runeActive: z.boolean() }),
   popup: PopupState.nullable(),
 })
 export type GameState = z.infer<typeof GameState>

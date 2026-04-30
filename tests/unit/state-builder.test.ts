@@ -1,107 +1,170 @@
 import { describe, it, expect } from 'vitest'
-import { buildGameState, FAR_AWAY } from '@/perception/state-builder'
-import type { PerceptionFrame } from '@/core/types'
-
-const baseFrame: PerceptionFrame = {
-  timestamp: 1000,
-  detections: [
-    { class: 'player', bbox: [500, 320, 40, 60], confidence: 0.98 },
-    { class: 'mob_generic', bbox: [420, 300, 80, 60], confidence: 0.91 },
-    { class: 'mob_generic', bbox: [650, 310, 80, 60], confidence: 0.87 },
-    { class: 'rune', bbox: [1750, 100, 48, 48], confidence: 0.95 },
-  ],
-  screenshotMeta: { width: 1920, height: 1080 },
-  overallConfidence: 0.93,
-}
-
-const noPlayerFrame: PerceptionFrame = {
-  ...baseFrame,
-  detections: baseFrame.detections.filter((d) => d.class !== 'player'),
-}
+import { buildGameState, PlayerTracker } from '@/perception/state-builder'
+import type { YoloDetection } from '@/perception/yolo'
 
 const minimapPos = { x: 100, y: 80 }
 const bounds = { x: [25, 205] as [number, number], y: [40, 130] as [number, number] }
 
-describe('buildGameState — vitals + minimap (always present)', () => {
-  it('uses Reflex vitals (not perception) for hp/mp', () => {
-    const s = buildGameState(baseFrame, { hp: 0.42, mp: 0.78 }, minimapPos, bounds)
-    expect(s.player.hp).toBe(0.42)
-    expect(s.player.mp).toBe(0.78)
+const playerDet: YoloDetection = {
+  class: 'player',
+  bbox: [500, 320, 40, 60],
+  confidence: 0.98,
+}
+const mobLeft: YoloDetection = {
+  class: 'mob',
+  bbox: [400, 320, 50, 50],
+  confidence: 0.92,
+}
+const mobRight: YoloDetection = {
+  class: 'mob',
+  bbox: [600, 320, 50, 50],
+  confidence: 0.85,
+}
+
+describe('buildGameState — nav channel', () => {
+  it('passes minimap pos through unchanged', () => {
+    const s = buildGameState({
+      detections: [],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos,
+    })
+    expect(s.nav.playerMinimapPos).toEqual(minimapPos)
   })
 
-  it('player.pos comes from minimap (canonical)', () => {
-    const s = buildGameState(baseFrame, { hp: 1, mp: 1 }, minimapPos, bounds)
-    expect(s.player.pos).toEqual(minimapPos)
+  it('flags boundsOk=false when minimap pos is outside bounds + margin', () => {
+    const out = { x: 500, y: 500 }
+    const s = buildGameState({
+      detections: [],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos: out,
+      bounds,
+      boundsMargin: 10,
+    })
+    expect(s.nav.boundsOk).toBe(false)
   })
 
-  it('player.pos null when minimapPos null', () => {
-    const s = buildGameState(baseFrame, { hp: 1, mp: 1 }, null, bounds)
-    expect(s.player.pos).toBeNull()
-  })
-
-  it('flags outOfBounds when minimap pos exits bounds + margin', () => {
-    const s = buildGameState(baseFrame, { hp: 1, mp: 1 }, { x: 220, y: 80 }, bounds, 10)
-    expect(s.flags.outOfBounds).toBe(true)
-  })
-
-  it('flags rune when rune detection >= 0.75', () => {
-    const s = buildGameState(baseFrame, { hp: 1, mp: 1 }, minimapPos, bounds)
-    expect(s.flags.runeActive).toBe(true)
+  it('boundsOk=true when minimap pos is null (no signal yet)', () => {
+    const s = buildGameState({
+      detections: [],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos: null,
+      bounds,
+    })
+    expect(s.nav.boundsOk).toBe(true)
   })
 })
 
-describe('buildGameState — combat anchor resolution (template mode)', () => {
-  it('uses player detection when present (posSource = detected)', () => {
-    const s = buildGameState(baseFrame, { hp: 1, mp: 1 }, minimapPos, bounds)
-    expect(s.player.posSource).toBe('detected')
-    expect(s.player.screenPos).toEqual({ x: 520, y: 350 })
-  })
-
-  it('falls back to screen-center when no player detection (posSource = anchor)', () => {
-    const s = buildGameState(noPlayerFrame, { hp: 1, mp: 1 }, minimapPos, bounds)
-    expect(s.player.posSource).toBe('anchor')
-    expect(s.player.screenPos).toEqual({ x: 960, y: 540 })
-  })
-
-  it('honours combatAnchor x/y offsets', () => {
-    const s = buildGameState(noPlayerFrame, { hp: 1, mp: 1 }, minimapPos, bounds, 10, {
-      x_offset_from_center: -100,
-      y_offset_from_center: 50,
+describe('buildGameState — combat channel', () => {
+  it('uses player detection center when present (source=detected)', () => {
+    const s = buildGameState({
+      detections: [playerDet, mobLeft, mobRight],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos,
     })
-    expect(s.player.screenPos).toEqual({ x: 860, y: 590 })
+    expect(s.combat.playerScreenSource).toBe('detected')
+    expect(s.combat.playerScreenPos).toEqual({ x: 520, y: 350 }) // bbox center
+    expect(s.combat.confidenceOk).toBe(true)
+  })
+
+  it('source=fallback when player never detected', () => {
+    const s = buildGameState({
+      detections: [mobLeft, mobRight],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos,
+    })
+    expect(s.combat.playerScreenSource).toBe('fallback')
+    expect(s.combat.playerScreenPos).toBeNull()
+    expect(s.combat.confidenceOk).toBe(false)
+  })
+
+  it('counts mobs left and right of player', () => {
+    const s = buildGameState({
+      detections: [playerDet, mobLeft, mobRight],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos,
+    })
+    expect(s.combat.mobsLeft).toBe(1)
+    expect(s.combat.mobsRight).toBe(1)
+  })
+
+  it('signs nearestMobDx (negative = mob to the left)', () => {
+    const s = buildGameState({
+      detections: [playerDet, mobLeft],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos,
+    })
+    expect(s.combat.nearestMobDx).not.toBeNull()
+    expect(s.combat.nearestMobDx).toBeLessThan(0)
+  })
+
+  it('sorts mobs by horizontal distance to player', () => {
+    const close: YoloDetection = { class: 'mob', bbox: [510, 320, 30, 30], confidence: 0.9 }
+    const far: YoloDetection = { class: 'mob', bbox: [800, 320, 30, 30], confidence: 0.9 }
+    const s = buildGameState({
+      detections: [playerDet, far, close],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos,
+    })
+    expect(s.combat.mobs[0].center.x).toBeCloseTo(525, 0) // close mob first
+    expect(s.combat.mobs[1].center.x).toBeCloseTo(815, 0)
+  })
+
+  it('produces empty combat geometry when no anchor available', () => {
+    const s = buildGameState({
+      detections: [mobLeft, mobRight], // no player
+      tracker: new PlayerTracker(),
+      vitals: { hp: 1, mp: 1 },
+      minimapPos,
+    })
+    expect(s.combat.mobsLeft).toBe(0)
+    expect(s.combat.mobsRight).toBe(0)
+    expect(s.combat.nearestMobDx).toBeNull()
+    expect(s.combat.mobs.length).toBe(2) // mobs still listed; just not anchored
   })
 })
 
-describe('buildGameState — enemy distance', () => {
-  it('horizontal metric (default) measures |dx|', () => {
-    const s = buildGameState(baseFrame, { hp: 1, mp: 1 }, minimapPos, bounds)
-    // player center 520; mobs at 460 (dx=60) and 690 (dx=170) → sorted asc.
-    expect(s.enemies.map((e) => e.distancePx)).toEqual([60, 170])
+describe('PlayerTracker', () => {
+  it('reports detected when YOLO returns a position', () => {
+    const tr = new PlayerTracker()
+    const r = tr.update({ x: 100, y: 100 })
+    expect(r.source).toBe('detected')
+    expect(r.pos).toEqual({ x: 100, y: 100 })
   })
 
-  it('y_band sentinels mobs on different platforms', () => {
-    const farBelow: PerceptionFrame = {
-      ...baseFrame,
-      detections: [
-        { class: 'player', bbox: [500, 320, 40, 60], confidence: 0.98 },
-        // Mob 200 px below player center → outside y_band=80.
-        { class: 'mob_generic', bbox: [510, 540, 40, 40], confidence: 0.9 },
-      ],
-    }
-    const s = buildGameState(farBelow, { hp: 1, mp: 1 }, minimapPos, bounds, 10, {
-      y_band: 80,
-    })
-    expect(s.enemies[0].distancePx).toBe(FAR_AWAY)
+  it('reports tracked for up to ttlTicks consecutive misses', () => {
+    const tr = new PlayerTracker({ ttlTicks: 2 })
+    tr.update({ x: 100, y: 100 })
+    expect(tr.update(null).source).toBe('tracked')
+    expect(tr.update(null).source).toBe('tracked')
+    expect(tr.update(null).source).toBe('fallback')
   })
 
-  it('Bug C: distancePx survives JSON round-trip as a finite number', () => {
-    const s = buildGameState(noPlayerFrame, { hp: 1, mp: 1 }, minimapPos, bounds, 10, {
-      y_band: 1, // forces all mobs into FAR_AWAY
+  it('resets stale counter on a new detection', () => {
+    const tr = new PlayerTracker({ ttlTicks: 2 })
+    tr.update({ x: 100, y: 100 })
+    tr.update(null) // 1
+    tr.update({ x: 110, y: 100 })
+    expect(tr.update(null).source).toBe('tracked') // counter reset
+  })
+})
+
+describe('buildGameState — vitals', () => {
+  it('passes Reflex hp/mp through verbatim', () => {
+    const s = buildGameState({
+      detections: [],
+      tracker: new PlayerTracker(),
+      vitals: { hp: 0.42, mp: 0.78 },
+      minimapPos,
     })
-    const round = JSON.parse(JSON.stringify(s)) as typeof s
-    for (const e of round.enemies) {
-      expect(typeof e.distancePx).toBe('number')
-      expect(Number.isFinite(e.distancePx)).toBe(true)
-    }
+    expect(s.vitals.hp).toBe(0.42)
+    expect(s.vitals.mp).toBe(0.78)
   })
 })

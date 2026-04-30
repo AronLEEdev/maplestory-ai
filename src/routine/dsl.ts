@@ -2,8 +2,15 @@ import type { GameState } from '@/core/types'
 
 export type Predicate = (state: GameState) => boolean
 
-const ALLOWED_FN = ['mobs_in_range', 'buff_expired', 'stuck_seconds'] as const
-const ALLOWED_VAR = ['hp', 'mp', 'rune_active'] as const
+const ALLOWED_FN = [
+  'mobs_in_range',
+  'mobs_left',
+  'mobs_right',
+  'nearest_mob_dx',
+  'buff_expired',
+  'stuck_seconds',
+] as const
+const ALLOWED_VAR = ['hp', 'mp', 'rune_active', 'bounds_ok'] as const
 
 type FnName = (typeof ALLOWED_FN)[number]
 type VarName = (typeof ALLOWED_VAR)[number]
@@ -149,19 +156,35 @@ function evalNode(n: Node, state: GameState): number | boolean {
     case 'var':
       switch (n.name) {
         case 'hp':
-          return state.player.hp
+          return state.vitals.hp
         case 'mp':
-          return state.player.mp
+          return state.vitals.mp
         case 'rune_active':
           return state.flags.runeActive
+        case 'bounds_ok':
+          return state.nav.boundsOk
       }
       throw new Error(`when: unknown var ${(n as { name: string }).name}`)
     case 'call':
       switch (n.name) {
         case 'mobs_in_range': {
+          // Counts mobs whose center-x is within ±N pixels of the player's
+          // screen position. Returns 0 when player anchor is unavailable —
+          // combat predicates that depend on this won't fire.
           const px = Number(evalNode(n.args[0], state))
-          return state.enemies.filter((e) => e.distancePx <= px).length
+          if (!state.combat.confidenceOk || !state.combat.playerScreenPos) return 0
+          const ax = state.combat.playerScreenPos.x
+          return state.combat.mobs.filter((m) => Math.abs(m.center.x - ax) <= px).length
         }
+        case 'mobs_left':
+          return state.combat.mobsLeft
+        case 'mobs_right':
+          return state.combat.mobsRight
+        case 'nearest_mob_dx':
+          // Signed dx of nearest mob from player. null collapses to a large
+          // sentinel so `nearest_mob_dx < 100` doesn't accidentally match
+          // when there's no mob.
+          return state.combat.nearestMobDx ?? Number.MAX_SAFE_INTEGER
         case 'buff_expired':
           return false // v1 stub — buff timers tracked in routine runner, not yet plumbed here
         case 'stuck_seconds':

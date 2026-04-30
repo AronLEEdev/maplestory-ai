@@ -6,11 +6,12 @@ import { ActionScheduler } from './scheduler'
 import { Actuator } from './actuator'
 import { RoutineRunner } from '@/routine/runner'
 import type { Routine } from '@/routine/schema'
-import { buildGameState, type Bounds } from '@/perception/state-builder'
+import { buildGameState, PlayerTracker, type Bounds } from '@/perception/state-builder'
 import type { ReflexWorker } from '@/reflex/pixel-sampler'
 import type { CaptureProvider } from '@/capture/index'
 import type { MinimapSampler } from '@/perception/minimap'
-import type { PerceptionFrame } from './types'
+import type { YoloDetector, YoloDetection } from '@/perception/yolo'
+import type { Rect } from './types'
 import { logger } from './logger'
 
 export type RunMode = 'dry-run' | 'safe' | 'live'
@@ -30,6 +31,12 @@ export interface OrchestratorOpts {
   bounds?: Bounds
   boundsMargin?: number
   actuatorJitterMs?: number
+  /** YOLO detector — when set, runs every tick. When absent, the runtime is
+   *  in stub mode (no mob/player detections; movement + reflex still work). */
+  yolo?: YoloDetector
+  /** game_window rect from the routine — passed to YoloDetector.detect for
+   *  both cropping the input and remapping bboxes to display-space. */
+  gameWindow?: Rect
 }
 
 export class Orchestrator {
@@ -40,6 +47,7 @@ export class Orchestrator {
   private stateIdx = 0
   private mode: RunMode
   private tickIndex = 0
+  private playerTracker = new PlayerTracker()
   /** Log every internal step at INFO for the first N ticks so silent hangs
    *  are pinpoint-localizable. After that the level drops to debug. */
   private static readonly VERBOSE_TICKS = 3
@@ -106,48 +114,50 @@ export class Orchestrator {
     if (this.states) {
       state = this.states[this.stateIdx++ % this.states.length]
     } else if (this.opts.capture && this.opts.minimap) {
-      // v2 Phase 1: perception is minimap + reflex only. YOLO inference
-      // module hooks in here in phase 5b. We still capture the screen so
-      // minimap.sample() can pull its region from the latest frame, but no
-      // mob detection happens — `enemies` stays empty.
+      // v2 perception pipeline:
+      //   1. capture full display
+      //   2. YOLO infers player + mobs (game-window-cropped haystack)
+      //   3. minimap sampler reads player dot from minimap region
+      //   4. reflex worker samples HP/MP — already running
+      //   5. fuse into BotState
       const tCapStart = this.opts.clock.now()
       const png = await this.opts.capture.captureScreen()
-      log({ bytes: png.length, ms: this.opts.clock.now() - tCapStart }, 'tick: captureScreen done')
-      const sharp = (await import('sharp')).default
-      const meta = await sharp(png).metadata()
-      const screenW = meta.width ?? 1920
-      const screenH = meta.height ?? 1080
       const tCapMs = this.opts.clock.now() - tCapStart
+      log({ bytes: png.length, ms: tCapMs }, 'tick: captureScreen done')
 
-      const emptyFrame: PerceptionFrame = {
-        timestamp: Date.now(),
-        detections: [],
-        screenshotMeta: { width: screenW, height: screenH },
-        overallConfidence: 0,
-      }
+      // Run YOLO + minimap in parallel — they hit disjoint regions and
+      // disjoint compute paths.
+      const tDetStart = this.opts.clock.now()
+      const [detections, minimapPos] = await Promise.all([
+        this.runYolo(png),
+        this.opts.minimap.sample().catch((err) => {
+          logger.warn({ err }, 'minimap sample threw')
+          return null
+        }),
+      ])
+      const tDetMs = this.opts.clock.now() - tDetStart
+      log(
+        { detections: detections.length, minimapPos, ms: tDetMs },
+        'tick: yolo + minimap done',
+      )
+
       this.opts.bus.emit('perception.tick', {
         captureMs: tCapMs,
-        detectMs: 0,
-        detections: 0,
+        detectMs: tDetMs,
+        detections: detections.length,
       })
 
-      let minimapPos = null
-      const t0 = this.opts.clock.now()
-      try {
-        minimapPos = await this.opts.minimap.sample()
-        log({ minimapPos, ms: this.opts.clock.now() - t0 }, 'tick: minimap sample done')
-      } catch (err) {
-        logger.warn({ err }, 'minimap sample threw')
-      }
       const vitals = this.opts.reflex?.current() ?? { hp: 1, mp: 1 }
-      state = buildGameState(
-        emptyFrame,
+      state = buildGameState({
+        detections,
+        tracker: this.playerTracker,
         vitals,
         minimapPos,
-        this.opts.bounds ?? null,
-        this.opts.boundsMargin ?? 10,
-      )
-      if (state.flags.outOfBounds) {
+        bounds: this.opts.bounds ?? null,
+        boundsMargin: this.opts.boundsMargin ?? 10,
+        timestamp: this.opts.clock.now(),
+      })
+      if (!state.nav.boundsOk) {
         logger.warn(
           { minimapPos, bounds: this.opts.bounds },
           'orchestrator: minimap pos out of bounds — aborting',
@@ -165,6 +175,18 @@ export class Orchestrator {
     await this.scheduler.tick()
     log({ ms: this.opts.clock.now() - tickStartedAt }, 'tick: complete')
     this.tickIndex++
+  }
+
+  /** Run YOLO inference if available, swallow errors so a bad model file
+   *  doesn't crash the run loop. Returns [] in stub mode (no detector). */
+  private async runYolo(png: Buffer): Promise<YoloDetection[]> {
+    if (!this.opts.yolo) return []
+    try {
+      return await this.opts.yolo.detect(png, this.opts.gameWindow)
+    } catch (err) {
+      logger.warn({ err }, 'yolo: detect threw — emitting empty detections this tick')
+      return []
+    }
   }
 
   pause(reason = 'user') {
