@@ -114,12 +114,22 @@ def write_data_yaml(dataset_dir: Path) -> Path:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('map', help='map name (e.g. henesys)')
-    ap.add_argument('--epochs', type=int, default=80)
+    ap.add_argument('--epochs', type=int, default=None)
     ap.add_argument('--imgsz', type=int, default=640)
     ap.add_argument('--batch', type=int, default=16)
     ap.add_argument('--device', default='mps', help='cpu | mps | cuda')
     ap.add_argument('--model', default='yolov8n.pt', help='COCO-pretrained start')
+    ap.add_argument(
+        '--quick',
+        action='store_true',
+        help='quick bootstrap pass (20 epochs) for model-assisted labeling. '
+             'After labeling another batch with the predictions, retrain '
+             'without --quick for the final model.',
+    )
     args = ap.parse_args()
+    # --epochs explicit wins; --quick → 20; default → 80.
+    if args.epochs is None:
+        args.epochs = 20 if args.quick else 80
 
     dataset_dir = Path('data') / 'dataset' / args.map
     if not dataset_dir.is_dir():

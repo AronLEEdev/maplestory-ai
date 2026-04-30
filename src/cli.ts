@@ -518,6 +518,8 @@ program
   .description('Open a browser canvas to draw player/mob bounding boxes on captured frames. Saves YOLO-format labels next to each frame.')
   .option('--port <n>', 'fixed port (default: random)', '0')
   .option('--no-open', "don't auto-open the browser")
+  .option('--model <path>', 'YOLO ONNX path for model-assisted suggestions (default: data/models/<map>.onnx)')
+  .option('--no-model', 'disable model-assisted suggestions even when a model exists')
   .action(async (map, opts) => {
     const datasetDir = pathJoin('data', 'dataset', map)
     const rawDir = pathJoin(datasetDir, 'raw')
@@ -534,7 +536,19 @@ program
     logger.info({ frames: summary.length, labeled, unlabeled }, 'labeler: dataset loaded')
 
     const port = Number(opts.port) || 0
-    const server = await startLabelerServer({ map, port })
+    const modelPath =
+      opts.model === false
+        ? undefined
+        : (opts.model as string | undefined) ?? pathJoin('data', 'models', `${map}.onnx`)
+    const modelAvailable = !!modelPath && existsSync(modelPath)
+    if (modelPath && !modelAvailable) {
+      logger.info({ modelPath }, 'labeler: no trained model yet — predict button will be disabled')
+    }
+    const server = await startLabelerServer({
+      map,
+      port,
+      modelPath: modelAvailable ? modelPath : undefined,
+    })
 
     const openUrl = (u: string) => {
       const cmd =
@@ -555,6 +569,7 @@ labeler running:
   ${summary.length} frames in ${rawDir}/
   labeled    : ${labeled}
   unlabeled  : ${unlabeled}
+  model      : ${modelAvailable ? modelPath : '(none — train one to enable model-assisted labeling)'}
 
 Keyboard:
   drag        draw a box
@@ -569,6 +584,14 @@ Keyboard:
   d           delete current frame
   n           next unlabeled
   ← / →       prev / next frame
+  p           predict (auto-fill suggestions from the trained model)
+
+Workflow tip: label ~30-50 frames manually, then
+  python python/train.py ${map} --quick
+  python python/export_onnx.py ${map}
+  npm run dev -- label ${map}      # reopen — predict button now active
+…and use the predict button on each remaining frame instead of drawing
+boxes from scratch. Cuts labeling time by ~3-5x.
 
 Press Ctrl-C to stop the server.
 `)

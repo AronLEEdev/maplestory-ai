@@ -25,6 +25,7 @@
         <button id="btn-next-unlabeled" title="Next unlabeled (n)">next unlabeled</button>
       </div>
       <div class="ctrl">
+        <button id="btn-predict" title="Run YOLO and pre-fill suggestions (p)" disabled>🔮 predict</button>
         <button id="btn-save" title="Save (s)">save</button>
         <button id="btn-empty" title="Save explicit empty (hard negative) (e)">save empty (hard-neg)</button>
         <button id="btn-delete" class="danger" title="Delete frame (d)">delete frame</button>
@@ -44,7 +45,7 @@
           <button id="btn-zoom-in" title="Zoom in (+)">+</button>
           <button id="btn-zoom-fit" title="Fit (0)">fit</button>
           <button id="btn-zoom-1" title="100% (1)">1:1</button>
-          <span class="hint">drag = box · shift/space-drag = pan · scroll = zoom · click box to select · del = delete · 1/2 = class</span>
+          <span class="hint">drag = box · shift/space-drag = pan · scroll = zoom · click box to select · del = delete · 1/2 = class · p = predict</span>
         </div>
         <div id="canvas-wrap">
           <canvas id="cv"></canvas>

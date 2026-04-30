@@ -13,7 +13,7 @@ source .venv/bin/activate
 pip install -r python/requirements.txt
 ```
 
-## Per-map workflow
+## Per-map workflow (model-assisted, ~3-5× faster than scratch)
 
 1. **Capture frames** while playing normally:
    ```bash
@@ -21,31 +21,47 @@ pip install -r python/requirements.txt
    ```
    Saves PNGs to `data/dataset/henesys/raw/`.
 
-2. **Label** them in the browser:
+2. **Label a small bootstrap set** (~30-50 frames, ~15-20 min):
    ```bash
    npm run dev -- label henesys
    ```
-   Draw boxes around `player` and `mob` instances. Save explicit empty
-   labels (hard negatives) on frames with no targets — those teach the
-   detector what *isn't* a mob.
+   Draw player + mob boxes manually on the first batch. Mix in a few
+   "hard negatives" (frames with no target — press `e` to save empty)
+   so the detector learns what *isn't* a mob.
 
-3. **Train**:
+3. **Quick-train a bootstrap model** (~10 min on M4):
    ```bash
-   python python/train.py henesys --epochs 80 --device mps
-   ```
-   On Apple Silicon use `--device mps`. Falls back to `cpu` if MPS isn't
-   available. ~30-60 min for ~300-500 labeled frames.
-
-4. **Export ONNX**:
-   ```bash
+   python python/train.py henesys --quick
    python python/export_onnx.py henesys
    ```
-   Writes `data/models/henesys.onnx`.
+   `--quick` is 20 epochs — enough for a weak-but-useful detector that
+   speeds up the next labeling pass.
 
-5. **Wire into the routine** — the calibrator sets
-   `perception.model_path: data/models/henesys.onnx` automatically.
-   Just `npm run dev -- run routines/henesys.yaml --mode dry-run` to verify
-   detections look sane, then `safe`/`live`.
+4. **Label the rest, model-assisted**:
+   ```bash
+   npm run dev -- label henesys
+   ```
+   The **predict** button (or `p` key) now runs YOLO on each frame and
+   pre-fills suggestion boxes (orange dashed). Click a box to edit it,
+   delete bad ones, draw new ones the model missed, hit save. Each
+   frame takes seconds instead of ~20 seconds.
+
+5. **Train the final model** with the full dataset:
+   ```bash
+   python python/train.py henesys           # 80 epochs by default
+   python python/export_onnx.py henesys
+   ```
+
+6. **Run the bot**:
+   ```bash
+   npm run dev -- run routines/henesys.yaml --mode dry-run
+   npm run dev -- run routines/henesys.yaml --mode safe
+   npm run dev -- run routines/henesys.yaml --mode live
+   ```
+
+If detections still miss, capture more frames covering the missing
+cases (different mob species, attack effects on screen, jumping,
+crowded scenes), label them with model assistance, and retrain.
 
 ## Class IDs
 

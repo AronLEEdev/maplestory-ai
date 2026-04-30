@@ -117,4 +117,45 @@ describe('labeler server routes', () => {
       await srv.close()
     }
   })
+
+  it('GET /api/frames reports modelAvailable=false when no model is configured', async () => {
+    const srv = await startLabelerServer({ map: 'henesys', port: 0, datasetDir })
+    try {
+      const data = await (await fetch(`${srv.url}/api/frames`)).json()
+      expect(data.modelAvailable).toBe(false)
+    } finally {
+      await srv.close()
+    }
+  })
+
+  it('GET /api/predict 404s when no model is configured', async () => {
+    const srv = await startLabelerServer({ map: 'henesys', port: 0, datasetDir })
+    try {
+      const resp = await fetch(`${srv.url}/api/predict/frame-a.png`)
+      expect(resp.status).toBe(404)
+      const data = await resp.json()
+      expect(data.ok).toBe(false)
+    } finally {
+      await srv.close()
+    }
+  })
+
+  it('GET /api/frames reports modelAvailable=true when modelPath exists', async () => {
+    // Use the user's already-validated henesys.onnx as a fixture if it exists,
+    // otherwise skip — we can't synthesize a valid ONNX file here.
+    const fixtureModel = join(process.cwd(), 'data', 'models', 'henesys.onnx')
+    if (!existsSync(fixtureModel)) return
+    const srv = await startLabelerServer({
+      map: 'henesys',
+      port: 0,
+      datasetDir,
+      modelPath: fixtureModel,
+    })
+    try {
+      const data = await (await fetch(`${srv.url}/api/frames`)).json()
+      expect(data.modelAvailable).toBe(true)
+    } finally {
+      await srv.close()
+    }
+  })
 })

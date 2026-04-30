@@ -12,7 +12,8 @@ import { dirname, join, basename, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import { logger } from '@/core/logger'
-import { parseYolo, CLASS_NAMES } from './yolo-format'
+import { parseYolo, CLASS_NAMES, classIdOf, type ClassName } from './yolo-format'
+import { YoloDetector } from '@/perception/yolo'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -25,6 +26,13 @@ export interface LabelerOpts {
   port?: number
   /** Override dataset root. Default: data/dataset/<map>/ */
   datasetDir?: string
+  /** Path to a YOLO ONNX model. If set and the file exists, the labeler
+   *  exposes /api/predict/:name for model-assisted labeling — predictions
+   *  pre-populate the canvas so the user only confirms/adjusts boxes. */
+  modelPath?: string
+  /** Confidence threshold for prediction suggestions. Default 0.25 — lower
+   *  than runtime so the user sees marginal candidates. */
+  predictConfidence?: number
 }
 
 export interface LabelerHandle {
@@ -89,9 +97,86 @@ export async function startLabelerServer(opts: LabelerOpts): Promise<LabelerHand
     return readFileSync(path)
   })
 
+  // Lazy-loaded YOLO detector for model-assisted labeling. Built once on
+  // the first /api/predict request so server boot stays fast and we don't
+  // touch the model file when the user is just labeling without prediction.
+  let detector: YoloDetector | null = null
+  let detectorLoadFailed = false
+  const ensureDetector = async (): Promise<YoloDetector | null> => {
+    if (detectorLoadFailed) return null
+    if (detector) return detector
+    if (!opts.modelPath || !existsSync(opts.modelPath)) return null
+    try {
+      const d = new YoloDetector({
+        modelPath: opts.modelPath,
+        confidenceThreshold: opts.predictConfidence ?? 0.25,
+      })
+      await d.load()
+      detector = d
+      return detector
+    } catch (err) {
+      logger.warn({ err, modelPath: opts.modelPath }, 'labeler: detector load failed')
+      detectorLoadFailed = true
+      return null
+    }
+  }
+
   fastify.get('/api/frames', async () => {
     const frames = listFrames(rawDir, labelDir)
-    return { map: opts.map, classes: CLASS_NAMES, frames }
+    return {
+      map: opts.map,
+      classes: CLASS_NAMES,
+      frames,
+      modelAvailable: !!(opts.modelPath && existsSync(opts.modelPath)) && !detectorLoadFailed,
+    }
+  })
+
+  fastify.get<{ Params: { name: string } }>('/api/predict/:name', async (req, reply) => {
+    const det = await ensureDetector()
+    if (!det) {
+      reply.code(404)
+      return { ok: false, error: 'no model available — train one first' }
+    }
+    const name = sanitizeName(req.params.name)
+    const path = join(rawDir, name)
+    if (!isPathInside(rawDir, path) || !existsSync(path)) {
+      reply.code(404)
+      return { ok: false, error: 'frame not found' }
+    }
+    try {
+      const png = readFileSync(path)
+      const t0 = Date.now()
+      // The frame on disk is already game-window-cropped (capture command
+      // saves with --routine). No further crop here — the dataset's coord
+      // system IS the frame's coord system.
+      const detections = await det.detect(png)
+      // Map detector output → labeler rect format. We intentionally drop
+      // unknown classes (model class id outside CLASS_NAMES) since the
+      // labeler can't represent them.
+      const knownClassIds = new Set<number>(
+        CLASS_NAMES.map((n) => classIdOf(n as ClassName)),
+      )
+      const suggestions = detections
+        .map((d) => {
+          const classId = classIdOf(d.class as ClassName)
+          if (!knownClassIds.has(classId)) return null
+          const [x, y, w, h] = d.bbox
+          return {
+            classId,
+            x: Math.round(x),
+            y: Math.round(y),
+            w: Math.round(w),
+            h: Math.round(h),
+            confidence: d.confidence,
+          }
+        })
+        .filter((s): s is NonNullable<typeof s> => s !== null)
+      return { ok: true, ms: Date.now() - t0, suggestions }
+    } catch (err) {
+      logger.warn({ err, name }, 'labeler: predict failed')
+      reply.code(500)
+      return { ok: false, error: String((err as Error).message) }
+    }
   })
 
   fastify.get<{ Params: { name: string } }>('/api/frame/:name', async (req, reply) => {

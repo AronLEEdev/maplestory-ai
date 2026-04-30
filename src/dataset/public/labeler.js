@@ -11,8 +11,11 @@ const state = {
   currentName: null,
   currentClassId: 1,
   // labeled rects in IMAGE-pixel coords
-  rects: [], // {classId, x, y, w, h}
+  // suggestion=true means "model-suggested, not yet user-confirmed" — drawn
+  // dashed and amber until accepted (user edits or saves the frame).
+  rects: [], // {classId, x, y, w, h, suggestion?, confidence?}
   selectedIdx: -1,
+  modelAvailable: false,
   // image
   img: null,
   imgW: 0,
@@ -43,6 +46,7 @@ const btnNextUnlabeled = document.getElementById('btn-next-unlabeled')
 const btnSave = document.getElementById('btn-save')
 const btnEmpty = document.getElementById('btn-empty')
 const btnDelete = document.getElementById('btn-delete')
+const btnPredict = document.getElementById('btn-predict')
 const btnZoomIn = document.getElementById('btn-zoom-in')
 const btnZoomOut = document.getElementById('btn-zoom-out')
 const btnZoomFit = document.getElementById('btn-zoom-fit')
@@ -75,6 +79,11 @@ async function refreshFrameList() {
   const data = await resp.json()
   state.classes = data.classes ?? state.classes
   state.frames = data.frames ?? []
+  state.modelAvailable = !!data.modelAvailable
+  btnPredict.disabled = !state.modelAvailable
+  btnPredict.title = state.modelAvailable
+    ? 'Run YOLO and pre-fill suggestions (p)'
+    : 'No trained model available — train one with `python python/train.py <map> --quick` first'
   // Repopulate class dropdown.
   clsSelect.innerHTML = state.classes
     .map(
@@ -238,18 +247,23 @@ function redraw() {
 function drawRect(rect, selected) {
   const a = imageToCanvas(rect.x, rect.y)
   const b = imageToCanvas(rect.x + rect.w, rect.y + rect.h)
-  const color = state.classColors[rect.classId] ?? '#fff'
+  // Suggestions render in amber + dashed until the user accepts them by
+  // editing or saving. Confirmed rects render in their class color.
+  const isSuggestion = rect.suggestion === true
+  const color = isSuggestion ? '#fa5' : state.classColors[rect.classId] ?? '#fff'
   ctx.strokeStyle = color
   ctx.lineWidth = selected ? 3 : 2
+  if (isSuggestion) ctx.setLineDash([6, 4])
   ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y)
-  // Class label
+  if (isSuggestion) ctx.setLineDash([])
+  // Class label.
   const name = state.classes[rect.classId] ?? `?${rect.classId}`
+  const conf = rect.confidence != null ? ` ${rect.confidence.toFixed(2)}` : ''
+  const label = isSuggestion ? `${name}${conf} (suggested)` : name
   ctx.fillStyle = color
   ctx.font = '12px ui-monospace'
-  ctx.fillText(name, a.x + 4, a.y - 4)
-  if (selected) {
-    drawHandles(a, b)
-  }
+  ctx.fillText(label, a.x + 4, a.y - 4)
+  if (selected) drawHandles(a, b)
 }
 
 function drawHandles(a, b) {
@@ -436,6 +450,8 @@ window.addEventListener('mouseup', () => {
     r.y = Math.round(r.y)
     r.w = Math.round(r.w)
     r.h = Math.round(r.h)
+    // Editing a suggestion confirms it.
+    delete r.suggestion
     drag = null
     state.dirty = true
     markDirty()
@@ -505,6 +521,8 @@ window.addEventListener('keydown', (e) => {
     }
   } else if (e.key === 's') {
     saveCurrent()
+  } else if (e.key === 'p') {
+    predictCurrent()
   } else if (e.key === 'e') {
     saveExplicitEmpty()
   } else if (e.key === 'd') {
@@ -556,6 +574,7 @@ btnZoom1.addEventListener('click', () => {
   redraw()
 })
 
+btnPredict.addEventListener('click', predictCurrent)
 btnSave.addEventListener('click', saveCurrent)
 btnEmpty.addEventListener('click', saveExplicitEmpty)
 btnDelete.addEventListener('click', deleteCurrent)
@@ -565,6 +584,9 @@ btnNextUnlabeled.addEventListener('click', nextUnlabeled)
 
 async function saveCurrent() {
   if (!state.currentName) return
+  // Saving promotes any remaining suggestions to confirmed labels — the
+  // user implicitly accepted them by hitting save.
+  for (const r of state.rects) delete r.suggestion
   const text = serializeYolo()
   setStatus('saving…')
   const resp = await fetch(`/api/labels/${encodeURIComponent(state.currentName)}`, {
@@ -583,6 +605,54 @@ async function saveCurrent() {
   if (f) f.labelCount = state.rects.length === 0 ? 0 : state.rects.length
   renderFrameList()
   setStatus(`saved ${state.rects.length} box${state.rects.length === 1 ? '' : 'es'}`)
+  redraw() // re-render now that suggestions are confirmed
+}
+
+async function predictCurrent() {
+  if (!state.currentName) return
+  if (!state.modelAvailable) {
+    setStatus('no model — train one first', true)
+    return
+  }
+  setStatus('predicting…')
+  let resp
+  try {
+    resp = await fetch(`/api/predict/${encodeURIComponent(state.currentName)}`)
+  } catch (err) {
+    setStatus(`predict failed: ${err.message}`, true)
+    return
+  }
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}))
+    setStatus(`predict failed: ${err.error ?? resp.statusText}`, true)
+    return
+  }
+  const data = await resp.json()
+  // REPLACE existing rects with suggestions. If the user had unsaved labels,
+  // warn first — predict on a fresh frame is the common case, but on a
+  // partially-labeled frame it's destructive.
+  if (state.rects.length > 0 && state.dirty) {
+    if (!confirm('Replace current rects with model predictions?')) {
+      setStatus('predict cancelled')
+      return
+    }
+  }
+  state.rects = (data.suggestions ?? []).map((s) => ({
+    classId: s.classId,
+    x: s.x,
+    y: s.y,
+    w: s.w,
+    h: s.h,
+    confidence: s.confidence,
+    suggestion: true,
+  }))
+  state.selectedIdx = -1
+  state.dirty = state.rects.length > 0
+  if (state.dirty) markDirty()
+  redraw()
+  setStatus(
+    `${state.rects.length} suggestion${state.rects.length === 1 ? '' : 's'} in ${data.ms ?? '?'}ms — review + save`,
+  )
 }
 
 async function saveExplicitEmpty() {

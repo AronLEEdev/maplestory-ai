@@ -18,16 +18,25 @@ npm run dev -- calibrate henesys
 # 2. Capture training frames while playing normally:
 npm run dev -- capture henesys --duration 10m --fps 2 --routine routines/henesys.yaml
 
-# 3. Label player + mob bounding boxes in the browser:
+# 3. Label ~30-50 frames manually to bootstrap (~15 min):
 npm run dev -- label henesys
 
-# 4. Train + export the YOLO model (Python toolchain):
+# 4. Quick-train a weak model so the labeler can pre-fill suggestions:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r python/requirements.txt
-python python/train.py henesys --epochs 80 --device mps
+python python/train.py henesys --quick   # 20 epochs, ~10 min on M4
 python python/export_onnx.py henesys
 
-# 5. Run the bot:
+# 5. Reopen the labeler — `p` key (or "predict" button) now pre-fills
+#    boxes from the bootstrap model. Accept/edit instead of drawing.
+#    The remaining 150-350 frames take ~10-15 min instead of an hour.
+npm run dev -- label henesys
+
+# 6. Final training pass with the full dataset:
+python python/train.py henesys           # 80 epochs
+python python/export_onnx.py henesys
+
+# 7. Run the bot:
 npm run dev -- run routines/henesys.yaml --mode dry-run
 npm run dev -- run routines/henesys.yaml --mode safe
 npm run dev -- run routines/henesys.yaml --mode live
