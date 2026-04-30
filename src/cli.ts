@@ -23,6 +23,7 @@ import { join as pathJoin } from 'node:path'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { startCalibrateServer } from '@/calibrate/server'
 import { captureFrames, parseDuration as parseDurationMs } from '@/dataset/capture'
+import { startLabelerServer, readFrameList } from '@/dataset/labeler'
 import { exec } from 'node:child_process'
 
 const program = new Command()
@@ -478,6 +479,73 @@ capture done:
 
 Next: open the calibrator labeler to draw player/mob boxes on these frames.
 `)
+  })
+
+program
+  .command('label <map>')
+  .description('Open a browser canvas to draw player/mob bounding boxes on captured frames. Saves YOLO-format labels next to each frame.')
+  .option('--port <n>', 'fixed port (default: random)', '0')
+  .option('--no-open', "don't auto-open the browser")
+  .action(async (map, opts) => {
+    const datasetDir = pathJoin('data', 'dataset', map)
+    const rawDir = pathJoin(datasetDir, 'raw')
+    if (!existsSync(rawDir)) {
+      logger.error(
+        { rawDir },
+        `dataset not found — run \`capture ${map}\` first to collect frames`,
+      )
+      process.exit(1)
+    }
+    const summary = readFrameList(map)
+    const labeled = summary.filter((f) => f.labelCount > 0).length
+    const unlabeled = summary.filter((f) => f.labelCount < 0).length
+    logger.info({ frames: summary.length, labeled, unlabeled }, 'labeler: dataset loaded')
+
+    const port = Number(opts.port) || 0
+    const server = await startLabelerServer({ map, port })
+
+    const openUrl = (u: string) => {
+      const cmd =
+        process.platform === 'darwin'
+          ? `open "${u}"`
+          : process.platform === 'win32'
+            ? `start "" "${u}"`
+            : `xdg-open "${u}"`
+      exec(cmd, (err) => {
+        if (err) logger.warn({ err, url: u }, 'labeler: auto-open failed — open the URL manually')
+      })
+    }
+
+    console.log(`
+labeler running:
+  ${server.url}/
+
+  ${summary.length} frames in ${rawDir}/
+  labeled    : ${labeled}
+  unlabeled  : ${unlabeled}
+
+Keyboard:
+  drag        draw a box
+  click box   select
+  shift/space drag pan
+  scroll      zoom
+  + / -       zoom in / out
+  0 / 1       fit / 100%
+  1 / 2 …     set class for selected box (or default class for new boxes)
+  s           save current frame
+  e           save explicit empty (hard negative)
+  d           delete current frame
+  n           next unlabeled
+  ← / →       prev / next frame
+
+Press Ctrl-C to stop the server.
+`)
+    if (opts.open !== false) openUrl(server.url)
+    process.on('SIGINT', async () => {
+      logger.info('labeler: SIGINT — stopping')
+      await server.close()
+      process.exit(0)
+    })
   })
 
 program

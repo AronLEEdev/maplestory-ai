@@ -1,0 +1,161 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #1a1a1a;
+  color: #ddd;
+  font-family: -apple-system, system-ui, sans-serif;
+  overflow: hidden;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: #0e0e0e;
+  border-bottom: 1px solid #333;
+  flex-wrap: wrap;
+}
+header h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ctrl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.dim {
+  color: #888;
+  font-size: 12px;
+}
+header select {
+  padding: 4px 6px;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 3px;
+  font-size: 13px;
+}
+header button {
+  padding: 4px 10px;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+}
+header button:hover:not(:disabled) {
+  background: #3a3a3a;
+}
+header button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+header button.danger {
+  background: #4a2a2a;
+  border-color: #844;
+}
+header button#btn-save {
+  background: #2a4a2a;
+  border-color: #4a8;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: calc(100vh - 50px);
+}
+
+#sidebar {
+  background: #0e0e0e;
+  border-right: 1px solid #333;
+  overflow-y: auto;
+  padding: 8px;
+}
+#frame-stats {
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  font-family: ui-monospace, monospace;
+}
+#frame-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+#frame-list li {
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+#frame-list li:hover {
+  background: #1f1f1f;
+}
+#frame-list li.active {
+  background: #2a4a2a;
+  color: #fff;
+}
+#frame-list li .count {
+  color: #888;
+  font-size: 11px;
+}
+#frame-list li.labeled .count {
+  color: #4a8;
+}
+#frame-list li.empty-neg .count {
+  color: #fa5;
+}
+
+#canvas-area {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+#zoom-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #0e0e0e;
+  border-bottom: 1px solid #333;
+}
+#zoom-toolbar button {
+  padding: 3px 8px;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 3px;
+  cursor: pointer;
+}
+#zoom-toolbar .hint {
+  margin-left: auto;
+  color: #777;
+  font-size: 11px;
+}
+#canvas-wrap {
+  flex: 1;
+  background: #000;
+  overflow: hidden;
+  position: relative;
+}
+#cv {
+  display: block;
+  cursor: crosshair;
+  width: 100%;
+  height: 100%;
+}

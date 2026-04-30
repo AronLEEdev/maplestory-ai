@@ -10,8 +10,8 @@ module.exports = {
   },
   overrides: [
     {
-      // Browser-side calibration UI runs in the user's browser, not Node.
-      files: ['src/calibrate/public/**/*.js'],
+      // Browser-side UI (calibrator + labeler) runs in the user's browser, not Node.
+      files: ['src/calibrate/public/**/*.js', 'src/dataset/public/**/*.js'],
       env: { browser: true, node: false },
       rules: {
         '@typescript-eslint/no-unused-vars': 'off',

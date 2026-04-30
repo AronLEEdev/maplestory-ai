@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>maplestory.ai — labeler</title>
+    <link rel="stylesheet" href="/static/labeler.css" />
+  </head>
+  <body>
+    <header>
+      <h1>maplestory.ai labeler</h1>
+      <div class="ctrl">
+        <span id="frame-name" class="dim">no frame loaded</span>
+        <span id="dim-info" class="dim"></span>
+      </div>
+      <div class="ctrl">
+        class:
+        <select id="cls-select">
+          <option value="0">player</option>
+          <option value="1" selected>mob</option>
+        </select>
+      </div>
+      <div class="ctrl">
+        <button id="btn-prev" title="Previous frame (←)">←</button>
+        <button id="btn-next" title="Next frame (→)">→</button>
+        <button id="btn-next-unlabeled" title="Next unlabeled (n)">next unlabeled</button>
+      </div>
+      <div class="ctrl">
+        <button id="btn-save" title="Save (s)">save</button>
+        <button id="btn-empty" title="Save explicit empty (hard negative) (e)">save empty (hard-neg)</button>
+        <button id="btn-delete" class="danger" title="Delete frame (d)">delete frame</button>
+      </div>
+      <span id="status" class="dim"></span>
+    </header>
+
+    <main>
+      <aside id="sidebar">
+        <div id="frame-stats" class="dim">loading…</div>
+        <ul id="frame-list"></ul>
+      </aside>
+
+      <section id="canvas-area">
+        <div id="zoom-toolbar">
+          <button id="btn-zoom-out" title="Zoom out (-)">−</button>
+          <button id="btn-zoom-in" title="Zoom in (+)">+</button>
+          <button id="btn-zoom-fit" title="Fit (0)">fit</button>
+          <button id="btn-zoom-1" title="100% (1)">1:1</button>
+          <span class="hint">drag = box · shift/space-drag = pan · scroll = zoom · click box to select · del = delete · 1/2 = class</span>
+        </div>
+        <div id="canvas-wrap">
+          <canvas id="cv"></canvas>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/static/labeler.js"></script>
+  </body>
+</html>
