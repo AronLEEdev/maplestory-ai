@@ -181,8 +181,15 @@ export class YoloDetector {
       })
     }
 
-    // 6. Per-class NMS.
-    const kept = nmsPerClass(decoded, this.iouThreshold)
+    // 6. NMS in two passes:
+    //    a) per-class NMS removes duplicate detections of the same class
+    //       (two anchors firing on one mushroom).
+    //    b) class-agnostic NMS removes cross-class duplicates at the same
+    //       position (one anchor calls it 'mob', another calls it 'player'
+    //       — pick the higher-confidence one). At any pixel the thing is
+    //       one entity, not two.
+    const perClassKept = nmsPerClass(decoded, this.iouThreshold)
+    const kept = nmsAgnostic(perClassKept, 0.5)
 
     // 7. Reverse letterbox + add gameWindow offset → display-space bboxes.
     const offX = gameWindow?.x ?? 0
@@ -216,6 +223,25 @@ function hwcToChw(hwc: Buffer, w: number, h: number): Float32Array {
     out[2 * stride + i] = hwc[i * 3 + 2] / 255
   }
   return out
+}
+
+/** Class-agnostic NMS — drops any pair of overlapping boxes regardless of
+ *  class. Use AFTER per-class NMS to enforce mutual exclusion across classes
+ *  (player + mob can't coexist at the same pixel). */
+function nmsAgnostic(boxes: DecodedBox[], iouThresh: number): DecodedBox[] {
+  const sorted = [...boxes].sort((a, b) => b.score - a.score)
+  const kept: DecodedBox[] = []
+  for (const b of sorted) {
+    let drop = false
+    for (const k of kept) {
+      if (iou(b, k) >= iouThresh) {
+        drop = true
+        break
+      }
+    }
+    if (!drop) kept.push(b)
+  }
+  return kept
 }
 
 function nmsPerClass(boxes: DecodedBox[], iouThresh: number): DecodedBox[] {
