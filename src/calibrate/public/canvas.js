@@ -811,10 +811,10 @@ function canSave() {
   ) {
     return false
   }
-  // mob crops required only in YOLO mode. minimap-only mode skips step 6.
+  // mob crops required only in YOLO mode. minimap-only and replay modes skip step 6.
   const modeSelect = document.getElementById('mode-select')
-  const mode = modeSelect?.value === 'none' ? 'none' : 'yolo'
-  if (mode === 'yolo' && state.mobCrops.length === 0) return false
+  const mode = modeSelect?.value
+  if (mode !== 'none' && mode !== 'replay' && state.mobCrops.length === 0) return false
   return true
 }
 
@@ -933,7 +933,9 @@ btnSave.addEventListener('click', async () => {
   const playerEntry = state.mobCrops.find((m) => m.name === '_player')
   const mobs = state.mobCrops.filter((m) => m.name !== '_player')
   const modeSelect = document.getElementById('mode-select')
-  const detectionMode = modeSelect?.value === 'none' ? 'none' : 'yolo'
+  const detectionMode = ['none', 'replay'].includes(modeSelect?.value)
+    ? modeSelect.value
+    : 'yolo'
 
   const body = {
     windowTitle: state.windowTitle,

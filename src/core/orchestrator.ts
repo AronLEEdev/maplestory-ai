@@ -12,6 +12,8 @@ import type { CaptureProvider } from '@/capture/index'
 import type { MinimapSampler } from '@/perception/minimap'
 import type { YoloDetector, YoloDetection } from '@/perception/yolo'
 import type { Rect } from './types'
+import { ReplayPlayer } from '@/replay/player'
+import type { Recording } from '@/replay/format'
 import { logger } from './logger'
 
 export type RunMode = 'dry-run' | 'safe' | 'live'
@@ -37,12 +39,18 @@ export interface OrchestratorOpts {
   /** game_window rect from the routine — passed to YoloDetector.detect for
    *  both cropping the input and remapping bboxes to display-space. */
   gameWindow?: Rect
+  /** Recording — when set, drives keypresses from a replay instead of the
+   *  rotation/movement engine. detection_mode='replay' uses this. The
+   *  orchestrator builds the ReplayPlayer internally so it can route the
+   *  player's emit() through its own ActionScheduler. */
+  replayRecording?: Recording
 }
 
 export class Orchestrator {
   private scheduler: ActionScheduler
   private actuator: Actuator
   private routineRunner: RoutineRunner
+  private replayPlayer?: ReplayPlayer
   private states?: GameState[]
   private stateIdx = 0
   private mode: RunMode
@@ -69,6 +77,15 @@ export class Orchestrator {
     this.routineRunner = new RoutineRunner(opts.routine, opts.clock, (a) =>
       this.scheduler.submit('routine', a, 'routine'),
     )
+    if (opts.replayRecording) {
+      this.replayPlayer = new ReplayPlayer({
+        recording: opts.replayRecording,
+        clock: opts.clock,
+        emit: (a) => this.scheduler.submit('routine', a, 'routine'),
+        loop: true,
+      })
+      this.replayPlayer.start()
+    }
     this.states = opts.states
   }
 
@@ -171,7 +188,19 @@ export class Orchestrator {
     if (!state) return
     this.opts.bus.emit('state.built', state)
     log({ ms: this.opts.clock.now() - tickStartedAt }, 'tick: state built + emitted')
-    this.routineRunner.tick(state)
+    // Replay mode: ReplayPlayer drives actions; routine runner stays a no-op
+    // (the routine yaml has empty rotation + movement). Reflex still fires
+    // via scheduleEmergency in parallel.
+    if (this.replayPlayer) {
+      this.replayPlayer.tick()
+      if (this.replayPlayer.isDone()) {
+        logger.info('replay: recording complete — aborting (loop=false)')
+        this.abort('replay_done')
+        return
+      }
+    } else {
+      this.routineRunner.tick(state)
+    }
     await this.scheduler.tick()
     log({ ms: this.opts.clock.now() - tickStartedAt }, 'tick: complete')
     this.tickIndex++

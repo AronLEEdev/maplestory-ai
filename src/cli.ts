@@ -22,6 +22,7 @@ import { ReplayWriter } from '@/replay/writer'
 import { join as pathJoin } from 'node:path'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { startCalibrateServer } from '@/calibrate/server'
+import { ReplayRecorder } from '@/replay/recorder'
 import { captureFrames, parseDuration as parseDurationMs } from '@/dataset/capture'
 import { startLabelerServer, readFrameList } from '@/dataset/labeler'
 import { exec } from 'node:child_process'
@@ -242,12 +243,15 @@ program
   npm run dev -- run ${result.routinePath} --mode dry-run         # state log
   npm run dev -- run ${result.routinePath} --mode safe            # pots only
   npm run dev -- run ${result.routinePath} --mode live            # full bot`
+          const replayNext = `Next (replay mode — record once, bot replays):
+  npm run dev -- record-replay ${mapName}      # F12 stops, saves replays/${mapName}/recording.json
+  npm run dev -- run ${result.routinePath} --mode live`
           console.log(`
 Calibration complete:
   routine:        ${result.routinePath}
   detection mode: ${result.detectionMode}
 ${result.warnings.length ? '\nwarnings:\n  - ' + result.warnings.join('\n  - ') + '\n' : ''}
-${result.detectionMode === 'none' ? noneNext : yoloNext}
+${result.detectionMode === 'replay' ? replayNext : result.detectionMode === 'none' ? noneNext : yoloNext}
 `)
           await handle.close()
           resolve()
@@ -532,6 +536,68 @@ Next: open the calibrator labeler to draw player/mob boxes on these frames.
   })
 
 program
+  .command('record-replay <map>')
+  .description('Record a keystroke timeline for blind replay (auto-maple style). Saves to replays/<map>/recording.json. F12 stops.')
+  .option('--out <path>', 'override output path (default: replays/<map>/recording.json)')
+  .option('--countdown <s>', 'seconds to wait so you can focus the game', '5')
+  .action(async (map, opts) => {
+    const outPath = (opts.out as string | undefined) ?? pathJoin('replays', map, 'recording.json')
+    const fg = await getForegroundWindowTitle()
+    const windowTitle = fg ?? 'MapleStory'
+    const countdown = Number(opts.countdown)
+    if (Number.isFinite(countdown) && countdown > 0) {
+      console.log(`focus the game window now — recording starts in ${countdown}s`)
+      for (let i = countdown; i > 0; i--) {
+        console.log(`  ${i}…`)
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+    const recorder = new ReplayRecorder({
+      map,
+      windowTitle,
+      outPath,
+      // F10/F12 are bot-control hotkeys. Don't bake them into the recording.
+      ignoreKeys: ['F10', 'F12'],
+    })
+    recorder.start()
+
+    const { GlobalKeyboardListener } = await import('node-global-key-listener')
+    const keyListener = new GlobalKeyboardListener()
+    keyListener.addListener((e) => {
+      const type = e.state === 'DOWN' ? 'keydown' : 'keyup'
+      recorder.recordKey(type, String(e.name ?? ''))
+    })
+
+    console.log(`
+recording... play normally. Press F12 to stop and save.
+  out: ${outPath}
+`)
+    await new Promise<void>((resolve) => {
+      const hk = new HotkeyService({
+        onPauseToggle: () => {},
+        onAbort: async () => {
+          const r = recorder.stop()
+          keyListener.kill()
+          hk.stop()
+          console.log(`
+recorded:
+  events:     ${r.events.length}
+  durationMs: ${r.durationMs}
+  out:        ${outPath}
+
+next:
+  hand-edit routines/${map}.yaml — set perception.detection_mode: replay
+  and perception.recording_path: ${outPath}
+  npm run dev -- run routines/${map}.yaml --mode live
+`)
+          resolve()
+        },
+      })
+      hk.start()
+    })
+  })
+
+program
   .command('label <map>')
   .description('Open a browser canvas to draw player/mob bounding boxes on captured frames. Saves YOLO-format labels next to each frame.')
   .option('--port <n>', 'fixed port (default: random)', '0')
@@ -671,11 +737,29 @@ program
     //
     // v2.2: detection_mode='none' (auto-maple style) skips YOLO entirely.
     // --no-detection CLI flag also forces this regardless of yaml setting.
+    // detection_mode='replay' (record-and-play) loads a recording and ignores
+    // YOLO entirely.
     const forceNoDetection = opts.detection === false
     const detectionMode =
       forceNoDetection ? 'none' : (routine.perception.detection_mode ?? 'yolo')
     let yolo: import('@/perception/yolo').YoloDetector | undefined
-    if (detectionMode === 'none') {
+    let replayRecording: import('@/replay/format').Recording | undefined
+    if (detectionMode === 'replay') {
+      const recPath = routine.perception.recording_path
+      if (!recPath || !existsSync(recPath)) {
+        logger.error(
+          { recording_path: recPath },
+          'replay: recording_path missing or file not found — run `record-replay <map>` first',
+        )
+        process.exit(1)
+      }
+      const { loadRecording } = await import('@/replay/player')
+      replayRecording = loadRecording(recPath)
+      logger.info(
+        { recPath, events: replayRecording.events.length, durationMs: replayRecording.durationMs },
+        'replay: recording loaded',
+      )
+    } else if (detectionMode === 'none') {
       logger.info(
         { reason: forceNoDetection ? '--no-detection flag' : 'detection_mode=none' },
         'yolo: skipped — minimap-only mode (no mob detection)',
@@ -742,6 +826,7 @@ program
       minimap,
       yolo,
       gameWindow: gameWindowFromYaml,
+      replayRecording,
       bounds: routine.bounds
         ? {
             x: routine.bounds.x as [number, number],

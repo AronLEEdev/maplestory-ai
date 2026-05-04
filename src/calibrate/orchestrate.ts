@@ -28,8 +28,9 @@ export interface SaveBody {
   /** Optional player crop in display-space. Same null semantics as mobCrops. */
   playerCrop?: Rect | null
   /** v2.2: 'yolo' (default) trains + uses YOLO. 'none' is auto-maple style
-   *  (minimap + cadence attack, no ML). */
-  detectionMode?: 'yolo' | 'none'
+   *  (minimap + cadence attack, no ML). 'replay' is record-and-play
+   *  (no detection, blind playback of a recording.json). */
+  detectionMode?: 'yolo' | 'none' | 'replay'
 }
 
 export interface OrchestrateOpts {
@@ -54,8 +55,9 @@ export interface OrchestrateResult {
   templatesWritten: number
   warnings: string[]
   /** v2.2: surfaces the detection mode chosen so CLI can branch its
-   *  next-steps message (YOLO needs capture+label+train; none doesn't). */
-  detectionMode: 'yolo' | 'none'
+   *  next-steps message (YOLO needs capture+label+train; none doesn't;
+   *  replay needs record-replay). */
+  detectionMode: 'yolo' | 'none' | 'replay'
 }
 
 /**
@@ -123,6 +125,7 @@ export async function orchestrateSave(
   // file as "stub mode" — no detections, but everything else (minimap,
   // movement, reflex) still works.
   const modelPath = join('data', 'models', `${map}.onnx`)
+  const recordingPath = join('replays', map, 'recording.json')
   const calibrationData: CalibrationData = {
     resolution: [screenW, screenH],
     windowTitle: opts.body.windowTitle,
@@ -132,6 +135,7 @@ export async function orchestrateSave(
     bounds: { x: bx, y: by },
     waypointXs: opts.body.waypointXs,
     modelPath,
+    recordingPath,
     detectionMode: opts.body.detectionMode ?? 'yolo',
   }
   writeRoutine({ routinePath, data: calibrationData })
@@ -154,7 +158,7 @@ export async function orchestrateSave(
     manifestPath: '',
     templatesWritten: 0,
     warnings,
-    detectionMode: opts.body.detectionMode ?? 'yolo',
+    detectionMode: (opts.body.detectionMode ?? 'yolo') as 'yolo' | 'none' | 'replay',
   }
 }
 

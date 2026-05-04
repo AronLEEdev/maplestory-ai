@@ -19,11 +19,15 @@ export interface CalibrationData {
   bounds: { x: [number, number]; y: [number, number] }
   waypointXs: number[]
   /** Path to the YOLO ONNX weights for this map (data/models/<map>.onnx).
-   *  Used when detectionMode === 'yolo'; ignored when 'none'. */
+   *  Used when detectionMode === 'yolo'; ignored when 'none'/'replay'. */
   modelPath: string
+  /** Path to the replay recording.json (replays/<map>/recording.json).
+   *  Used when detectionMode === 'replay'. */
+  recordingPath?: string
   /** v2.2: 'yolo' = train + use YOLO. 'none' = minimap + cadence attack
-   *  only (auto-maple style). Default 'yolo' for backward compat. */
-  detectionMode?: 'yolo' | 'none'
+   *  only (auto-maple style). 'replay' = record-and-play (no detection,
+   *  blind playback of recording.json). Default 'yolo' for backward compat. */
+  detectionMode?: 'yolo' | 'none' | 'replay'
 }
 
 export interface WriteOpts {
@@ -76,6 +80,10 @@ const DEFAULT_ROTATION_NONE = [
   },
 ]
 
+// detection_mode='replay': blind playback. Rotation + movement empty —
+// the recording IS the routine. Reflex still fires in parallel for pots.
+const DEFAULT_ROTATION_REPLAY: Array<Record<string, unknown>> = []
+
 const DEFAULT_STOP_CONDITION = {
   or: [
     { duration: '1h' },
@@ -89,12 +97,16 @@ const DEFAULT_PERCEPTION = {
   confidence_threshold: 0.5,
 }
 
-function buildMovement(waypointXs: number[], detectionMode: 'yolo' | 'none') {
+function buildMovement(waypointXs: number[], detectionMode: 'yolo' | 'none' | 'replay') {
   // YOLO mode: pause walking while attacking — bot stops to face + hit the
   // mob, then resumes patrol.
   // NONE mode: never pause — character keeps walking and attack-on-cadence
   // catches mobs in passing. pause_while_attacking would deadlock the patrol
   // because every rotation rule fires every tick.
+  // REPLAY mode: movement is empty — the recording drives all keypresses.
+  if (detectionMode === 'replay') {
+    return { primitives: [], loop: false, pause_while_attacking: false }
+  }
   const pause = detectionMode === 'yolo'
   if (waypointXs.length < 2) {
     if (waypointXs.length === 1) {
@@ -142,9 +154,21 @@ export function composeRoutine(
     }
   }
 
-  const detectionMode: 'yolo' | 'none' = data.detectionMode ?? 'yolo'
+  const detectionMode: 'yolo' | 'none' | 'replay' = data.detectionMode ?? 'yolo'
   const defaultRotation =
-    detectionMode === 'none' ? DEFAULT_ROTATION_NONE : DEFAULT_ROTATION_YOLO
+    detectionMode === 'replay'
+      ? DEFAULT_ROTATION_REPLAY
+      : detectionMode === 'none'
+        ? DEFAULT_ROTATION_NONE
+        : DEFAULT_ROTATION_YOLO
+
+  const perceptionBase: Record<string, unknown> = {
+    detection_mode: detectionMode,
+    ...((preserved.perception as Record<string, unknown>) ?? DEFAULT_PERCEPTION),
+  }
+  if (detectionMode === 'yolo') perceptionBase.model_path = data.modelPath
+  if (detectionMode === 'replay' && data.recordingPath)
+    perceptionBase.recording_path = data.recordingPath
 
   const obj: Record<string, unknown> = {
     game: 'maplestory',
@@ -155,11 +179,7 @@ export function composeRoutine(
     minimap_player_color: data.minimapPlayerColor,
     bounds: data.bounds,
     reflex: preserved.reflex ?? DEFAULT_REFLEX,
-    perception: {
-      detection_mode: detectionMode,
-      model_path: data.modelPath,
-      ...((preserved.perception as Record<string, unknown>) ?? DEFAULT_PERCEPTION),
-    },
+    perception: perceptionBase,
     rotation: preserved.rotation ?? defaultRotation,
     movement: buildMovement(data.waypointXs, detectionMode),
     stop_condition: preserved.stop_condition ?? DEFAULT_STOP_CONDITION,

@@ -12,17 +12,20 @@ export const ReflexEntry = z.object({
 /**
  * v2 perception: YOLO inference replaces ZNCC template matching.
  *
- * v2.2 adds `detection_mode`:
- *   'yolo'  → runtime loads model_path + runs inference each tick
- *   'none'  → minimap-only mode (auto-maple style). No ML at all.
- *             Movement waypoints + cadence-based attack via `every:` rotation.
- *             Fastest setup — no capture/label/train needed.
+ * detection_mode:
+ *   'yolo'   → runtime loads model_path + runs inference each tick
+ *   'none'   → minimap-only mode (auto-maple style). No ML at all.
+ *              Waypoint patrol + cadence-based attack via `every:` rotation.
+ *   'replay' → blind playback of a recording.json. No detection, no
+ *              waypoints. Bot replays the recorded keystroke timeline
+ *              while reflex pots fire in parallel. Loops on completion.
  */
 export const PerceptionConfig = z.object({
-  detection_mode: z.enum(['yolo', 'none']).default('yolo'),
-  /** Path to the YOLO ONNX weights. Required for detection_mode='yolo';
-   *  ignored for 'none'. */
+  detection_mode: z.enum(['yolo', 'none', 'replay']).default('yolo'),
+  /** Path to the YOLO ONNX weights. Required for detection_mode='yolo'. */
   model_path: z.string().optional(),
+  /** Path to recording.json. Required for detection_mode='replay'. */
+  recording_path: z.string().optional(),
   fps: z.number().min(1).max(30).default(8),
   /** YOLO confidence threshold below which detections are dropped. */
   confidence_threshold: z.number().min(0).max(1).default(0.5),

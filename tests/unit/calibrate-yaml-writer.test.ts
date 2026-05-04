@@ -186,4 +186,36 @@ describe('composeRoutine — detection_mode branching (v2.2)', () => {
     const obj = YAML.parse(readFileSync(path, 'utf8'))
     expect(obj.perception.detection_mode).toBe('none')
   })
+
+  it('mode=replay: empty rotation, empty movement, recording_path set', () => {
+    const r = composeRoutine({
+      ...baseData,
+      detectionMode: 'replay',
+      recordingPath: 'replays/henesys/recording.json',
+    })
+    const perception = r.perception as Record<string, unknown>
+    expect(perception.detection_mode).toBe('replay')
+    expect(perception.recording_path).toBe('replays/henesys/recording.json')
+    // Replay model_path should NOT be set (yolo-only field).
+    expect(perception.model_path).toBeUndefined()
+    expect((r.rotation as unknown[]).length).toBe(0)
+    const mv = r.movement as { primitives: unknown[]; pause_while_attacking: boolean }
+    expect(mv.primitives.length).toBe(0)
+    expect(mv.pause_while_attacking).toBe(false)
+  })
+
+  it('mode=replay yaml round-trips', () => {
+    const path = join(dir, 'r.yaml')
+    writeRoutine({
+      routinePath: path,
+      data: {
+        ...baseData,
+        detectionMode: 'replay',
+        recordingPath: 'replays/henesys/recording.json',
+      },
+    })
+    const obj = YAML.parse(readFileSync(path, 'utf8'))
+    expect(obj.perception.detection_mode).toBe('replay')
+    expect(obj.perception.recording_path).toBe('replays/henesys/recording.json')
+  })
 })
