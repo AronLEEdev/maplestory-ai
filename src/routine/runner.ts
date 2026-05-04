@@ -5,10 +5,20 @@ import { MovementFsm } from './movement'
 import type { Clock } from '@/core/clock'
 
 export function parseDuration(s: string): number {
-  const m = /^(\d+)(s|m|h)$/.exec(s)
-  if (!m) throw new Error(`bad duration: ${s}`)
+  const m = /^(\d+)(ms|s|m|h)$/.exec(s)
+  if (!m) throw new Error(`bad duration: ${s} (use e.g. 500ms, 30s, 5m, 1h)`)
   const n = Number(m[1])
-  return n * (m[2] === 's' ? 1000 : m[2] === 'm' ? 60_000 : 3_600_000)
+  switch (m[2]) {
+    case 'ms':
+      return n
+    case 's':
+      return n * 1000
+    case 'm':
+      return n * 60_000
+    case 'h':
+      return n * 3_600_000
+  }
+  return n
 }
 
 interface CompiledRule {
