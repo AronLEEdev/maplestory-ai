@@ -92,14 +92,20 @@ export class YoloDetector {
     let imgH: number
     let imgPipeline = sharp(png)
     if (gameWindow) {
-      imgPipeline = imgPipeline.extract({
-        left: Math.max(0, Math.round(gameWindow.x)),
-        top: Math.max(0, Math.round(gameWindow.y)),
-        width: Math.max(1, Math.round(gameWindow.w)),
-        height: Math.max(1, Math.round(gameWindow.h)),
-      })
-      imgW = gameWindow.w
-      imgH = gameWindow.h
+      // Clamp gameWindow to actual screenshot dims — yaml-configured rects
+      // sometimes exceed the capture by a few pixels (off-by-one in
+      // calibration, retina backing-pixel rounding) and sharp.extract
+      // throws "bad extract area" instead of silently truncating.
+      const meta = await sharp(png).metadata()
+      const screenW = meta.width ?? gameWindow.x + gameWindow.w
+      const screenH = meta.height ?? gameWindow.y + gameWindow.h
+      const left = Math.max(0, Math.min(screenW - 1, Math.round(gameWindow.x)))
+      const top = Math.max(0, Math.min(screenH - 1, Math.round(gameWindow.y)))
+      const width = Math.max(1, Math.min(screenW - left, Math.round(gameWindow.w)))
+      const height = Math.max(1, Math.min(screenH - top, Math.round(gameWindow.h)))
+      imgPipeline = imgPipeline.extract({ left, top, width, height })
+      imgW = width
+      imgH = height
     } else {
       const meta = await sharp(png).metadata()
       imgW = meta.width ?? 0
