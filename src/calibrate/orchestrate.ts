@@ -27,6 +27,9 @@ export interface SaveBody {
   mobCrops: Array<{ name: string; rect: Rect | null }>
   /** Optional player crop in display-space. Same null semantics as mobCrops. */
   playerCrop?: Rect | null
+  /** v2.2: 'yolo' (default) trains + uses YOLO. 'none' is auto-maple style
+   *  (minimap + cadence attack, no ML). */
+  detectionMode?: 'yolo' | 'none'
 }
 
 export interface OrchestrateOpts {
@@ -50,6 +53,9 @@ export interface OrchestrateResult {
   manifestPath: string
   templatesWritten: number
   warnings: string[]
+  /** v2.2: surfaces the detection mode chosen so CLI can branch its
+   *  next-steps message (YOLO needs capture+label+train; none doesn't). */
+  detectionMode: 'yolo' | 'none'
 }
 
 /**
@@ -126,6 +132,7 @@ export async function orchestrateSave(
     bounds: { x: bx, y: by },
     waypointXs: opts.body.waypointXs,
     modelPath,
+    detectionMode: opts.body.detectionMode ?? 'yolo',
   }
   writeRoutine({ routinePath, data: calibrationData })
 
@@ -147,6 +154,7 @@ export async function orchestrateSave(
     manifestPath: '',
     templatesWritten: 0,
     warnings,
+    detectionMode: opts.body.detectionMode ?? 'yolo',
   }
 }
 

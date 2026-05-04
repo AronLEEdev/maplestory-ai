@@ -18,8 +18,12 @@ export interface CalibrationData {
   minimapPlayerColor: { rgb: [number, number, number]; tolerance: number }
   bounds: { x: [number, number]; y: [number, number] }
   waypointXs: number[]
-  /** Path to the YOLO ONNX weights for this map (data/models/<map>.onnx). */
+  /** Path to the YOLO ONNX weights for this map (data/models/<map>.onnx).
+   *  Used when detectionMode === 'yolo'; ignored when 'none'. */
   modelPath: string
+  /** v2.2: 'yolo' = train + use YOLO. 'none' = minimap + cadence attack
+   *  only (auto-maple style). Default 'yolo' for backward compat. */
+  detectionMode?: 'yolo' | 'none'
 }
 
 export interface WriteOpts {
@@ -46,7 +50,7 @@ const DEFAULT_REFLEX = [
   },
 ]
 
-const DEFAULT_ROTATION = [
+const DEFAULT_ROTATION_YOLO = [
   {
     // 200 native pixels horizontal — inside one character-width of attack
     // range. Anything larger and the bot locks on mobs across the screen
@@ -57,8 +61,18 @@ const DEFAULT_ROTATION = [
     action: { kind: 'attack_facing', key: 'ctrl', holdMs: 800, faceTapMs: 60 },
     cooldown_ms: 500,
     // Require 2 consecutive ticks of mobs-in-range before pausing patrol.
-    // Filters single-frame ZNCC flickers that would otherwise freeze movement.
+    // Filters single-frame flickers that would otherwise freeze movement.
     min_persist_ticks: 2,
+  },
+]
+
+// detection_mode='none' (auto-maple style): no mob detection. Just press
+// the attack key on a fixed cadence while patrolling. The character walks
+// through mobs and the periodic attack catches them in range.
+const DEFAULT_ROTATION_NONE = [
+  {
+    every: '500ms',
+    action: { kind: 'press', key: 'ctrl', holdMs: 200 },
   },
 ]
 
@@ -75,24 +89,29 @@ const DEFAULT_PERCEPTION = {
   confidence_threshold: 0.5,
 }
 
-function buildMovement(waypointXs: number[]) {
+function buildMovement(waypointXs: number[], detectionMode: 'yolo' | 'none') {
+  // YOLO mode: pause walking while attacking — bot stops to face + hit the
+  // mob, then resumes patrol.
+  // NONE mode: never pause — character keeps walking and attack-on-cadence
+  // catches mobs in passing. pause_while_attacking would deadlock the patrol
+  // because every rotation rule fires every tick.
+  const pause = detectionMode === 'yolo'
   if (waypointXs.length < 2) {
-    // Need at least two waypoints to form a patrol; bail with a single point.
     if (waypointXs.length === 1) {
       return {
         primitives: [{ op: 'walk_to_x', x: waypointXs[0] }],
         loop: false,
-        pause_while_attacking: true,
+        pause_while_attacking: pause,
       }
     }
-    return { primitives: [], loop: true, pause_while_attacking: true }
+    return { primitives: [], loop: true, pause_while_attacking: pause }
   }
   const primitives: Array<Record<string, unknown>> = []
   for (const x of waypointXs) {
     primitives.push({ op: 'walk_to_x', x })
     primitives.push({ op: 'wait', ms: 200 })
   }
-  return { primitives, loop: true, pause_while_attacking: true }
+  return { primitives, loop: true, pause_while_attacking: pause }
 }
 
 /**
@@ -123,6 +142,10 @@ export function composeRoutine(
     }
   }
 
+  const detectionMode: 'yolo' | 'none' = data.detectionMode ?? 'yolo'
+  const defaultRotation =
+    detectionMode === 'none' ? DEFAULT_ROTATION_NONE : DEFAULT_ROTATION_YOLO
+
   const obj: Record<string, unknown> = {
     game: 'maplestory',
     recorded_from: 'calibrate',
@@ -133,11 +156,12 @@ export function composeRoutine(
     bounds: data.bounds,
     reflex: preserved.reflex ?? DEFAULT_REFLEX,
     perception: {
+      detection_mode: detectionMode,
       model_path: data.modelPath,
       ...((preserved.perception as Record<string, unknown>) ?? DEFAULT_PERCEPTION),
     },
-    rotation: preserved.rotation ?? DEFAULT_ROTATION,
-    movement: buildMovement(data.waypointXs),
+    rotation: preserved.rotation ?? defaultRotation,
+    movement: buildMovement(data.waypointXs, detectionMode),
     stop_condition: preserved.stop_condition ?? DEFAULT_STOP_CONDITION,
   }
   if (data.gameWindow) obj.game_window = data.gameWindow

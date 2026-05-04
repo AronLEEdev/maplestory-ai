@@ -30,8 +30,9 @@ export interface LabelerOpts {
    *  exposes /api/predict/:name for model-assisted labeling — predictions
    *  pre-populate the canvas so the user only confirms/adjusts boxes. */
   modelPath?: string
-  /** Confidence threshold for prediction suggestions. Default 0.25 — lower
-   *  than runtime so the user sees marginal candidates. */
+  /** Confidence threshold for prediction suggestions. Default 0.05 — bootstrap
+   *  models trained on 30-50 frames score real targets at 0.05-0.20, way below
+   *  runtime threshold (0.5+). User filters noise visually instead of by score. */
   predictConfidence?: number
 }
 
@@ -109,7 +110,7 @@ export async function startLabelerServer(opts: LabelerOpts): Promise<LabelerHand
     try {
       const d = new YoloDetector({
         modelPath: opts.modelPath,
-        confidenceThreshold: opts.predictConfidence ?? 0.25,
+        confidenceThreshold: opts.predictConfidence ?? 0.05,
       })
       await d.load()
       detector = d

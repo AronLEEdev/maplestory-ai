@@ -9,6 +9,15 @@
     <header>
       <h1>maplestory.ai calibrate</h1>
       <div id="step-indicator"></div>
+      <div id="mode-toggle" title="Detection mode — choose YOLO for smart attack targeting (requires capture+label+train), or minimap-only for auto-maple style (no ML)">
+        <label>
+          mode:
+          <select id="mode-select">
+            <option value="yolo" selected>YOLO (detect mobs)</option>
+            <option value="none">minimap-only (no ML)</option>
+          </select>
+        </label>
+      </div>
     </header>
 
     <main>

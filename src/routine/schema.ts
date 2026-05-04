@@ -11,11 +11,17 @@ export const ReflexEntry = z.object({
 
 /**
  * v2 perception: YOLO inference replaces ZNCC template matching.
- * Per-map ONNX weights live at `model_path`; absent file = stub mode
- * (runtime emits empty detections, useful before training is done).
+ *
+ * v2.2 adds `detection_mode`:
+ *   'yolo'  → runtime loads model_path + runs inference each tick
+ *   'none'  → minimap-only mode (auto-maple style). No ML at all.
+ *             Movement waypoints + cadence-based attack via `every:` rotation.
+ *             Fastest setup — no capture/label/train needed.
  */
 export const PerceptionConfig = z.object({
-  /** Path to the YOLO ONNX weights for this map. Stub mode if missing. */
+  detection_mode: z.enum(['yolo', 'none']).default('yolo'),
+  /** Path to the YOLO ONNX weights. Required for detection_mode='yolo';
+   *  ignored for 'none'. */
   model_path: z.string().optional(),
   fps: z.number().min(1).max(30).default(8),
   /** YOLO confidence threshold below which detections are dropped. */

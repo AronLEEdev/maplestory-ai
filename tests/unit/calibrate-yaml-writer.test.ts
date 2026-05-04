@@ -156,3 +156,34 @@ describe('writeRoutine', () => {
     expect(() => writeRoutine({ routinePath: join(dir, 'r.yaml'), data: bad })).toThrow()
   })
 })
+
+describe('composeRoutine — detection_mode branching (v2.2)', () => {
+  it('default mode is yolo: writes attack_facing rotation + pause_while_attacking=true', () => {
+    const r = composeRoutine(baseData)
+    const perception = r.perception as Record<string, unknown>
+    expect(perception.detection_mode).toBe('yolo')
+    const rot = r.rotation as Array<{ when?: string; action: { kind: string } }>
+    expect(rot[0].when).toContain('mobs_in_range')
+    expect(rot[0].action.kind).toBe('attack_facing')
+    const mv = r.movement as { pause_while_attacking: boolean }
+    expect(mv.pause_while_attacking).toBe(true)
+  })
+
+  it('mode=none: writes cadence press rotation + pause_while_attacking=false', () => {
+    const r = composeRoutine({ ...baseData, detectionMode: 'none' })
+    const perception = r.perception as Record<string, unknown>
+    expect(perception.detection_mode).toBe('none')
+    const rot = r.rotation as Array<{ every?: string; action: { kind: string; key: string } }>
+    expect(rot[0].every).toBe('500ms')
+    expect(rot[0].action.kind).toBe('press')
+    const mv = r.movement as { pause_while_attacking: boolean }
+    expect(mv.pause_while_attacking).toBe(false)
+  })
+
+  it('mode=none yaml validates against the Routine schema', () => {
+    const path = join(dir, 'r.yaml')
+    writeRoutine({ routinePath: path, data: { ...baseData, detectionMode: 'none' } })
+    const obj = YAML.parse(readFileSync(path, 'utf8'))
+    expect(obj.perception.detection_mode).toBe('none')
+  })
+})

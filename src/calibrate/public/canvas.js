@@ -807,11 +807,14 @@ function canSave() {
     !state.playerDotAt ||
     !state.bounds ||
     !state.bounds.bottomRight ||
-    state.waypointXs.length < 2 ||
-    state.mobCrops.length === 0
+    state.waypointXs.length < 2
   ) {
     return false
   }
+  // mob crops required only in YOLO mode. minimap-only mode skips step 6.
+  const modeSelect = document.getElementById('mode-select')
+  const mode = modeSelect?.value === 'none' ? 'none' : 'yolo'
+  if (mode === 'yolo' && state.mobCrops.length === 0) return false
   return true
 }
 
@@ -921,9 +924,16 @@ btnHand?.addEventListener('click', () => {
   cv.style.cursor = state.handTool ? 'grab' : 'crosshair'
 })
 
+// Re-render save button + step instructions when detection mode changes.
+document.getElementById('mode-select')?.addEventListener('change', () => {
+  updateUI()
+})
+
 btnSave.addEventListener('click', async () => {
   const playerEntry = state.mobCrops.find((m) => m.name === '_player')
   const mobs = state.mobCrops.filter((m) => m.name !== '_player')
+  const modeSelect = document.getElementById('mode-select')
+  const detectionMode = modeSelect?.value === 'none' ? 'none' : 'yolo'
 
   const body = {
     windowTitle: state.windowTitle,
@@ -934,6 +944,7 @@ btnSave.addEventListener('click', async () => {
     waypointXs: state.waypointXs,
     mobCrops: mobs,
     playerCrop: playerEntry?.rect,
+    detectionMode,
   }
   btnSave.disabled = true
   btnSave.textContent = 'Saving…'

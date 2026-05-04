@@ -227,14 +227,27 @@ program
         port: Number(opts.port),
         onSave: async (result) => {
           logger.info(result, 'calibrate: saved')
+          const mapName = map
+          const yoloNext = `Next (YOLO mode — needs training data):
+  npm run dev -- capture ${mapName} --duration 10m --routine ${result.routinePath}
+  npm run dev -- label ${mapName}                # label ~50 frames
+  python python/train.py ${mapName} --quick      # bootstrap train
+  python python/export_onnx.py ${mapName}
+  npm run dev -- label ${mapName}                # predict-assist remaining frames
+  python python/train.py ${mapName}              # final train (80 epochs)
+  python python/export_onnx.py ${mapName}
+  npm run dev -- run ${result.routinePath} --mode dry-run`
+          const noneNext = `Next (minimap-only mode — ready to run, no training):
+  npm run dev -- inspect ${result.routinePath}                    # verify regions
+  npm run dev -- run ${result.routinePath} --mode dry-run         # state log
+  npm run dev -- run ${result.routinePath} --mode safe            # pots only
+  npm run dev -- run ${result.routinePath} --mode live            # full bot`
           console.log(`
 Calibration complete:
-  routine:   ${result.routinePath}
-  templates: ${result.templatesDir}  (${result.templatesWritten} variants)
+  routine:        ${result.routinePath}
+  detection mode: ${result.detectionMode}
 ${result.warnings.length ? '\nwarnings:\n  - ' + result.warnings.join('\n  - ') + '\n' : ''}
-Next:
-  npm run dev -- inspect ${result.routinePath}
-  npm run dev -- run ${result.routinePath} --mode dry-run
+${result.detectionMode === 'none' ? noneNext : yoloNext}
 `)
           await handle.close()
           resolve()
@@ -466,6 +479,11 @@ program
         const routine = Routine.parse(obj)
         gameWindow = (obj.game_window as { x: number; y: number; w: number; h: number } | undefined) ?? undefined
         windowTitle = routine.window_title || windowTitle
+        if (routine.perception.detection_mode === 'none') {
+          logger.warn(
+            'routine.perception.detection_mode is "none" — capture is unnecessary in minimap-only mode. Continuing anyway in case you plan to switch modes later.',
+          )
+        }
       } catch (err) {
         logger.warn({ err }, 'capture: routine parse failed — falling back to full-display frames')
       }
@@ -529,6 +547,21 @@ program
         `dataset not found — run \`capture ${map}\` first to collect frames`,
       )
       process.exit(1)
+    }
+    // Warn if the routine is in minimap-only mode — labels won't be used.
+    const routinePath = pathJoin('routines', `${map}.yaml`)
+    if (existsSync(routinePath)) {
+      try {
+        const r = Routine.parse(YAML.parse(readFileSync(routinePath, 'utf8')))
+        if (r.perception.detection_mode === 'none') {
+          logger.warn(
+            { routinePath },
+            'routine is in minimap-only mode (detection_mode=none) — labels here aren\'t used at runtime unless you switch back to detection_mode=yolo',
+          )
+        }
+      } catch {
+        // ignore parse errors here — labeler doesn't strictly need a routine
+      }
     }
     const summary = readFrameList(map)
     const labeled = summary.filter((f) => f.labelCount > 0).length
@@ -606,6 +639,10 @@ Press Ctrl-C to stop the server.
 program
   .command('run <routinePath>')
   .option('--mode <mode>', 'dry-run|safe|live', 'dry-run')
+  .option(
+    '--no-detection',
+    'force minimap-only mode (skip YOLO regardless of routine.perception.detection_mode)',
+  )
   .action(async (routinePath, opts) => {
     if (!existsSync(routinePath)) {
       logger.error({ routinePath }, 'routine not found')
@@ -631,8 +668,19 @@ program
     // v2 perception: load YOLO weights pointed at by routine.perception.model_path
     // (relative to cwd). Missing/broken file falls back to "stub mode" — runtime
     // emits empty detections per tick so movement + reflex still drive the bot.
+    //
+    // v2.2: detection_mode='none' (auto-maple style) skips YOLO entirely.
+    // --no-detection CLI flag also forces this regardless of yaml setting.
+    const forceNoDetection = opts.detection === false
+    const detectionMode =
+      forceNoDetection ? 'none' : (routine.perception.detection_mode ?? 'yolo')
     let yolo: import('@/perception/yolo').YoloDetector | undefined
-    if (routine.perception.model_path && existsSync(routine.perception.model_path)) {
+    if (detectionMode === 'none') {
+      logger.info(
+        { reason: forceNoDetection ? '--no-detection flag' : 'detection_mode=none' },
+        'yolo: skipped — minimap-only mode (no mob detection)',
+      )
+    } else if (routine.perception.model_path && existsSync(routine.perception.model_path)) {
       const { YoloDetector } = await import('@/perception/yolo')
       yolo = new YoloDetector({
         modelPath: routine.perception.model_path,
