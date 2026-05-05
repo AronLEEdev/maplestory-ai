@@ -14,7 +14,7 @@ import { logger } from '@/core/logger'
  *   - F-keys are 'F1'..'F12'.
  */
 const KEY_MAP: Record<string, string> = {
-  // Modifiers
+  // Modifiers — short forms
   ctrl: 'LeftControl',
   control: 'LeftControl',
   shift: 'LeftShift',
@@ -22,11 +22,22 @@ const KEY_MAP: Record<string, string> = {
   cmd: 'LeftCmd',
   command: 'LeftCmd',
   meta: 'LeftCmd',
+  // Modifiers — node-global-key-listener naming (record-replay mode)
+  'left ctrl': 'LeftControl',
+  'right ctrl': 'RightControl',
+  'left shift': 'LeftShift',
+  'right shift': 'RightShift',
+  'left alt': 'LeftAlt',
+  'right alt': 'RightAlt',
+  'left meta': 'LeftCmd',
+  'right meta': 'RightCmd',
   // Navigation
   page_up: 'PageUp',
   pageup: 'PageUp',
+  'page up': 'PageUp',
   page_down: 'PageDown',
   pagedown: 'PageDown',
+  'page down': 'PageDown',
   home: 'Home',
   end: 'End',
   insert: 'Insert',
@@ -38,11 +49,16 @@ const KEY_MAP: Record<string, string> = {
   escape: 'Escape',
   esc: 'Escape',
   space: 'Space',
-  // Arrows
+  // Arrows — short forms
   left: 'Left',
   right: 'Right',
   up: 'Up',
   down: 'Down',
+  // Arrows — node-global-key-listener naming
+  'left arrow': 'Left',
+  'right arrow': 'Right',
+  'up arrow': 'Up',
+  'down arrow': 'Down',
   // F-keys
   f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4',
   f5: 'F5', f6: 'F6', f7: 'F7', f8: 'F8',
