@@ -14,10 +14,12 @@ export interface SaveBody {
   windowTitle: string
   gameWindow?: Rect
   regions: { hp: Rect; mp: Rect; minimap: Rect }
-  /** Pixel coord (display-space) where user clicked to sample player dot. */
-  playerDotAt: { x: number; y: number }
-  /** Two corner pixel coords inside the minimap region (minimap-LOCAL). */
-  bounds: { topLeft: { x: number; y: number }; bottomRight: { x: number; y: number } }
+  /** Pixel coord (display-space) where user clicked to sample player dot.
+   *  Optional in replay mode (where minimap pos isn't used at runtime). */
+  playerDotAt?: { x: number; y: number }
+  /** Two corner pixel coords inside the minimap region (minimap-LOCAL).
+   *  Optional in replay mode. */
+  bounds?: { topLeft: { x: number; y: number }; bottomRight: { x: number; y: number } }
   /** Each entry is a minimap-LOCAL x coord. */
   waypointXs: number[]
   /** Each entry: bbox in display-space + a sprite name. `rect` may be null
@@ -86,8 +88,21 @@ export async function orchestrateSave(
   }
 
 
-  // Sample player-dot RGB from the captured PNG at the user's click coord.
-  const dotRgb = await sampleColor(opts.screenshotPng, opts.body.playerDotAt)
+  // Replay mode: dot/bounds optional. Default to a fallback yellow color +
+  // minimap-region-sized bounds so the schema validates and the runtime can
+  // still log minimap pos for debugging (no out_of_bounds in replay).
+  const isReplay = opts.body.detectionMode === 'replay'
+  const dotAt = opts.body.playerDotAt
+  const boundsIn = opts.body.bounds
+  const hasDot = !!dotAt
+  const hasBounds = !!boundsIn?.topLeft && !!boundsIn?.bottomRight
+
+  const dotRgb: [number, number, number] = dotAt
+    ? await sampleColor(opts.screenshotPng, dotAt)
+    : [240, 220, 60] // typical Maplestory player-dot yellow
+  if (!hasDot && !isReplay) {
+    throw new Error('orchestrateSave: playerDotAt required outside replay mode')
+  }
 
   // Map minimap-local bounds back to a clean tuple shape. Users on flat-
   // ground maps tend to click both corners on the same horizontal line,
@@ -95,22 +110,36 @@ export async function orchestrateSave(
   // tens of pixels (jumps, slight platform offsets), so a degenerate range
   // immediately trips out_of_bounds. Inflate to a minimum spread.
   const MIN_BOUND_SPREAD = 30
-  let bx: [number, number] = [
-    Math.min(opts.body.bounds.topLeft.x, opts.body.bounds.bottomRight.x),
-    Math.max(opts.body.bounds.topLeft.x, opts.body.bounds.bottomRight.x),
-  ]
-  let by: [number, number] = [
-    Math.min(opts.body.bounds.topLeft.y, opts.body.bounds.bottomRight.y),
-    Math.max(opts.body.bounds.topLeft.y, opts.body.bounds.bottomRight.y),
-  ]
-  if (bx[1] - bx[0] < MIN_BOUND_SPREAD) {
-    const c = (bx[0] + bx[1]) / 2
-    bx = [Math.round(c - MIN_BOUND_SPREAD / 2), Math.round(c + MIN_BOUND_SPREAD / 2)]
+  let bx: [number, number]
+  let by: [number, number]
+  if (boundsIn?.topLeft && boundsIn?.bottomRight) {
+    bx = [
+      Math.min(boundsIn.topLeft.x, boundsIn.bottomRight.x),
+      Math.max(boundsIn.topLeft.x, boundsIn.bottomRight.x),
+    ]
+    by = [
+      Math.min(boundsIn.topLeft.y, boundsIn.bottomRight.y),
+      Math.max(boundsIn.topLeft.y, boundsIn.bottomRight.y),
+    ]
+    if (bx[1] - bx[0] < MIN_BOUND_SPREAD) {
+      const c = (bx[0] + bx[1]) / 2
+      bx = [Math.round(c - MIN_BOUND_SPREAD / 2), Math.round(c + MIN_BOUND_SPREAD / 2)]
+    }
+    if (by[1] - by[0] < MIN_BOUND_SPREAD) {
+      const c = (by[0] + by[1]) / 2
+      by = [Math.round(c - MIN_BOUND_SPREAD / 2), Math.round(c + MIN_BOUND_SPREAD / 2)]
+    }
+  } else if (isReplay) {
+    // Replay mode bounds unused at runtime; fill with the minimap region's
+    // own dims so the schema validates.
+    const mm = opts.body.regions.minimap
+    bx = [0, mm.w]
+    by = [0, mm.h]
+  } else {
+    throw new Error('orchestrateSave: bounds required outside replay mode')
   }
-  if (by[1] - by[0] < MIN_BOUND_SPREAD) {
-    const c = (by[0] + by[1]) / 2
-    by = [Math.round(c - MIN_BOUND_SPREAD / 2), Math.round(c + MIN_BOUND_SPREAD / 2)]
-  }
+  void hasDot
+  void hasBounds
 
   // v2.0: no sprite extraction. The dataset (frame captures + labels) lives
   // under data/dataset/<map>/ and is collected by the `capture` command +

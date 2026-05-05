@@ -700,20 +700,45 @@ function updateUI() {
     instrText.textContent = 'Drag a rectangle around the entire minimap.'
     instrHint.textContent = 'Should encompass the playable map area shown in the minimap.'
   } else if (step.id === 'minimap-points') {
-    if (state.pointPhase === 0) {
+    const modeSelect = document.getElementById('mode-select')
+    const isReplay = modeSelect?.value === 'replay'
+    if (isReplay) {
+      instrText.textContent = 'Step 5 skipped in replay mode.'
+      instrHint.innerHTML =
+        'Replay mode plays back recorded keystrokes — no waypoints, no bounds, no dot color needed. ' +
+        '<br>Click <b>Next</b> or <b>Save</b>. (Optional: still set the dot color if you want minimap pos in logs.)'
+    } else if (state.pointPhase === 0) {
       instrText.textContent = 'Click the player dot on the minimap.'
-      instrHint.textContent = 'Zoom in first if the dot is small. Color sampled live.'
+      instrHint.innerHTML =
+        'Zoom in first if the dot is small. Color sampled live. ' +
+        '<button id="btn-reset-step5" style="margin-left:8px;font-size:11px;padding:2px 6px">↺ reset step 5</button>'
     } else if (state.pointPhase === 1) {
       instrText.textContent = 'Click the TOP-LEFT corner of the patrol area on the minimap.'
-      instrHint.textContent = 'Where the platform you grind on starts.'
+      instrHint.innerHTML =
+        'Where the platform you grind on starts. ' +
+        '<button id="btn-reset-step5" style="margin-left:8px;font-size:11px;padding:2px 6px">↺ reset step 5</button>'
     } else if (state.pointPhase === 2) {
       instrText.textContent =
         'Click the BOTTOM-RIGHT corner of the patrol area on the minimap.'
-      instrHint.textContent = 'Closes the bounding box.'
+      instrHint.innerHTML =
+        'Closes the bounding box. ' +
+        '<button id="btn-reset-step5" style="margin-left:8px;font-size:11px;padding:2px 6px">↺ reset step 5</button>'
     } else {
       instrText.textContent = `Click waypoint ${state.waypointXs.length + 1} (or press Next when done — need at least 2).`
-      instrHint.textContent = 'Each click adds an x-coordinate the bot will walk to.'
+      instrHint.innerHTML =
+        'Each click adds an x-coordinate the bot will walk to. ' +
+        '<button id="btn-reset-step5" style="margin-left:8px;font-size:11px;padding:2px 6px">↺ reset step 5</button>'
     }
+    // Wire reset button (rendered fresh each updateUI).
+    document.getElementById('btn-reset-step5')?.addEventListener('click', () => {
+      state.playerDotAt = null
+      state.playerDotRgb = null
+      state.bounds = null
+      state.waypointXs = []
+      state.pointPhase = 0
+      redraw()
+      updateUI()
+    })
   } else if (step.id === 'mobs') {
     instrText.textContent =
       'Drag rectangles around mob sprites (and optionally one over your character).'
@@ -800,10 +825,16 @@ window.__remove = (i) => {
 }
 
 function canSave() {
+  if (!state.regions.hp || !state.regions.mp || !state.regions.minimap) {
+    return false
+  }
+  const modeSelect = document.getElementById('mode-select')
+  const mode = modeSelect?.value
+  // Replay mode: only HP/MP/minimap regions required. Dot, bounds, waypoints,
+  // and mob crops all unused at runtime — recording drives every keypress.
+  if (mode === 'replay') return true
+  // YOLO + minimap-only modes need step 5 data.
   if (
-    !state.regions.hp ||
-    !state.regions.mp ||
-    !state.regions.minimap ||
     !state.playerDotAt ||
     !state.bounds ||
     !state.bounds.bottomRight ||
@@ -811,10 +842,8 @@ function canSave() {
   ) {
     return false
   }
-  // mob crops required only in YOLO mode. minimap-only and replay modes skip step 6.
-  const modeSelect = document.getElementById('mode-select')
-  const mode = modeSelect?.value
-  if (mode !== 'none' && mode !== 'replay' && state.mobCrops.length === 0) return false
+  // mob crops only required in YOLO mode.
+  if (mode !== 'none' && state.mobCrops.length === 0) return false
   return true
 }
 
