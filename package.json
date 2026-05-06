@@ -25,6 +25,7 @@
     "dotenv": "^17.4.2",
     "fastify": "^4.28.0",
     "node-global-key-listener": "^0.3.0",
+    "node-screenshots": "^0.2.8",
     "onnxruntime-node": "^1.25.1",
     "pino": "^9.0.0",
     "screenshot-desktop": "^1.15.0",
