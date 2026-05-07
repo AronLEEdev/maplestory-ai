@@ -49,8 +49,14 @@ pip install -r python/requirements.txt
 5. **Train the final model** with the full dataset:
    ```bash
    python python/train.py henesys           # 80 epochs by default
-   python python/export_onnx.py henesys
+   python python/export_onnx.py henesys     # → data/models/henesys.onnx (Node onnxruntime path)
+   python python/export_coreml.py henesys   # → data/models/henesys.mlpackage (Swift sidecar / v2.5+ streaming)
    ```
+
+   Both exports load the same fine-tuned weights. ONNX serves the legacy
+   Node-side onnxruntime-node path (1Hz polling). The .mlpackage is
+   what the v2.5 Swift sidecar loads for 30 FPS streaming on the Neural
+   Engine.
 
 6. **Run the bot**:
    ```bash
