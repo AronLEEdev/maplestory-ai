@@ -24,6 +24,11 @@ struct Args {
   var iou: Double = 0.45
   var displayId: Int?
   var heartbeatOnly: Bool = false
+  /// --capture-only runs the ScreenCaptureKit pipeline (task 3) without
+  /// inference/tracker. Emits FPS + per-frame ms stats on stderr; stdout
+  /// stays silent (no NDJSON yet — task 8 wires that). Used to verify
+  /// SCK works before model + tracker are in.
+  var captureOnly: Bool = false
 }
 
 enum ArgsError: Error, CustomStringConvertible {
@@ -75,6 +80,8 @@ func parseArgs(_ argv: [String]) throws -> Args {
       out.displayId = n
     case "--heartbeat-only":
       out.heartbeatOnly = true
+    case "--capture-only":
+      out.captureOnly = true
     case "-h", "--help":
       printUsage()
       exit(0)
@@ -83,8 +90,9 @@ func parseArgs(_ argv: [String]) throws -> Args {
     }
     i += 1
   }
-  // heartbeat-only mode skips required-arg checks so wiring tests are easy.
-  if out.heartbeatOnly { return out }
+  // heartbeat-only / capture-only modes skip required-arg checks so we
+  // can wire-test without a model + game window.
+  if out.heartbeatOnly || out.captureOnly { return out }
   if out.modelPath == nil { throw ArgsError.missing("--model") }
   if out.gameWindow == nil { throw ArgsError.missing("--game-window") }
   return out
@@ -98,6 +106,7 @@ func printUsage() {
       PerceptionSidecar --model <path> --game-window x,y,w,h \\
         [--fps 30] [--conf 0.5] [--iou 0.45] [--display <id>]
       PerceptionSidecar --heartbeat-only [--fps 10]
+      PerceptionSidecar --capture-only [--fps 30] [--display <id>]
 
     Emits NDJSON on stdout, one record per inferred frame:
       {"t":12345,"frameId":7,"tracks":[...],"detRaw":N}

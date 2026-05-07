@@ -16,15 +16,20 @@ do {
 }
 
 FileHandle.standardError.write(
-  "PerceptionSidecar \(version) — fps=\(parsed.fps) heartbeat-only=\(parsed.heartbeatOnly)\n"
+  "PerceptionSidecar \(version) — fps=\(parsed.fps) heartbeat-only=\(parsed.heartbeatOnly) capture-only=\(parsed.captureOnly)\n"
     .data(using: .utf8)!
 )
 
-if !parsed.heartbeatOnly {
-  // Capture + CoreML pipeline lands in tasks 3-8. For now error out so
-  // callers know the binary isn't usable in real mode yet.
+if parsed.captureOnly {
+  runCaptureOnlyMode(parsed: parsed)
+  dispatchMain()
+}
+
+if !parsed.heartbeatOnly && !parsed.captureOnly {
+  // Real mode (capture + inference + tracker) lands in task 8. Until then
+  // require --heartbeat-only or --capture-only.
   FileHandle.standardError.write(
-    "error: real-mode pipeline not implemented yet (tasks 3-8). Run with --heartbeat-only for wiring tests.\n"
+    "error: real-mode pipeline not implemented yet (task 8). Run with --heartbeat-only or --capture-only for now.\n"
       .data(using: .utf8)!
   )
   exit(1)
