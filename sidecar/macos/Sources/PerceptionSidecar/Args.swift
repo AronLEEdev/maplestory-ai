@@ -29,6 +29,14 @@ struct Args {
   /// stays silent (no NDJSON yet — task 8 wires that). Used to verify
   /// SCK works before model + tracker are in.
   var captureOnly: Bool = false
+  /// --inference-test loads the model, runs N dummy inferences with a
+  /// zero-tensor input, reports schema + timing on stderr, exits. Used
+  /// to verify the .mlpackage loads and runs on the Neural Engine
+  /// before capture is wired in (task 8).
+  var inferenceTest: Bool = false
+  /// Iterations for --inference-test. Default 50; first 5 discarded as
+  /// warm-up.
+  var inferenceTestIters: Int = 50
 }
 
 enum ArgsError: Error, CustomStringConvertible {
@@ -82,6 +90,14 @@ func parseArgs(_ argv: [String]) throws -> Args {
       out.heartbeatOnly = true
     case "--capture-only":
       out.captureOnly = true
+    case "--inference-test":
+      out.inferenceTest = true
+    case "--iters":
+      i += 1
+      guard let n = Int(argv[i]), n > 0 else {
+        throw ArgsError.invalid("--iters", argv[i])
+      }
+      out.inferenceTestIters = n
     case "-h", "--help":
       printUsage()
       exit(0)
@@ -94,6 +110,9 @@ func parseArgs(_ argv: [String]) throws -> Args {
   // can wire-test without a model + game window.
   if out.heartbeatOnly || out.captureOnly { return out }
   if out.modelPath == nil { throw ArgsError.missing("--model") }
+  // inference-test mode loads the model but doesn't capture, so
+  // --game-window is irrelevant.
+  if out.inferenceTest { return out }
   if out.gameWindow == nil { throw ArgsError.missing("--game-window") }
   return out
 }
@@ -107,6 +126,7 @@ func printUsage() {
         [--fps 30] [--conf 0.5] [--iou 0.45] [--display <id>]
       PerceptionSidecar --heartbeat-only [--fps 10]
       PerceptionSidecar --capture-only [--fps 30] [--display <id>]
+      PerceptionSidecar --inference-test --model <path> [--iters 50]
 
     Emits NDJSON on stdout, one record per inferred frame:
       {"t":12345,"frameId":7,"tracks":[...],"detRaw":N}

@@ -2,3 +2,7 @@
 .swiftpm/
 *.xcodeproj/
 DerivedData/
+
+# Compiled CoreML model cache produced by Inference.ensureCompiled()
+# next to the source .mlpackage. Regenerated on first run.
+**/*.mlmodelc/

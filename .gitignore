@@ -10,6 +10,8 @@ recordings/
 coverage
 data/calibrations/
 data/templates/
+# Compiled CoreML cache produced next to .mlpackage on first sidecar load.
+data/models/*.mlmodelc/
 
 # Override the user's global ~/.gitignore_global which excludes docs/ + .claude/
 !docs/

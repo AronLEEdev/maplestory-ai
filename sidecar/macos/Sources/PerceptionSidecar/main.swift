@@ -16,20 +16,25 @@ do {
 }
 
 FileHandle.standardError.write(
-  "PerceptionSidecar \(version) — fps=\(parsed.fps) heartbeat-only=\(parsed.heartbeatOnly) capture-only=\(parsed.captureOnly)\n"
+  "PerceptionSidecar \(version) — fps=\(parsed.fps) heartbeat-only=\(parsed.heartbeatOnly) capture-only=\(parsed.captureOnly) inference-test=\(parsed.inferenceTest)\n"
     .data(using: .utf8)!
 )
+
+if parsed.inferenceTest {
+  runInferenceTestMode(parsed: parsed)
+  // runInferenceTestMode exits internally; never returns.
+}
 
 if parsed.captureOnly {
   runCaptureOnlyMode(parsed: parsed)
   dispatchMain()
 }
 
-if !parsed.heartbeatOnly && !parsed.captureOnly {
+if !parsed.heartbeatOnly && !parsed.captureOnly && !parsed.inferenceTest {
   // Real mode (capture + inference + tracker) lands in task 8. Until then
-  // require --heartbeat-only or --capture-only.
+  // require one of the test-mode flags.
   FileHandle.standardError.write(
-    "error: real-mode pipeline not implemented yet (task 8). Run with --heartbeat-only or --capture-only for now.\n"
+    "error: real-mode pipeline not implemented yet (task 8). Run with --heartbeat-only, --capture-only, or --inference-test for now.\n"
       .data(using: .utf8)!
   )
   exit(1)
