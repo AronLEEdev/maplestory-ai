@@ -25,16 +25,21 @@ if parsed.inferenceTest {
   // runInferenceTestMode exits internally; never returns.
 }
 
+if parsed.preprocessTest {
+  runPreprocessTestMode(parsed: parsed)
+  dispatchMain()
+}
+
 if parsed.captureOnly {
   runCaptureOnlyMode(parsed: parsed)
   dispatchMain()
 }
 
-if !parsed.heartbeatOnly && !parsed.captureOnly && !parsed.inferenceTest {
+if !parsed.heartbeatOnly && !parsed.captureOnly && !parsed.inferenceTest && !parsed.preprocessTest {
   // Real mode (capture + inference + tracker) lands in task 8. Until then
   // require one of the test-mode flags.
   FileHandle.standardError.write(
-    "error: real-mode pipeline not implemented yet (task 8). Run with --heartbeat-only, --capture-only, or --inference-test for now.\n"
+    "error: real-mode pipeline not implemented yet (task 8). Run with --heartbeat-only, --capture-only, --inference-test, or --preprocess-test for now.\n"
       .data(using: .utf8)!
   )
   exit(1)

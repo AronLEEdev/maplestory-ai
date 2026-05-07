@@ -37,6 +37,10 @@ struct Args {
   /// Iterations for --inference-test. Default 50; first 5 discarded as
   /// warm-up.
   var inferenceTestIters: Int = 50
+  /// --preprocess-test runs SCK capture + Preprocessor for N frames,
+  /// reports per-frame ms stats, exits. Used to verify the BGRA →
+  /// 640×640 letterbox path stays inside our budget (~3ms target).
+  var preprocessTest: Bool = false
 }
 
 enum ArgsError: Error, CustomStringConvertible {
@@ -92,6 +96,8 @@ func parseArgs(_ argv: [String]) throws -> Args {
       out.captureOnly = true
     case "--inference-test":
       out.inferenceTest = true
+    case "--preprocess-test":
+      out.preprocessTest = true
     case "--iters":
       i += 1
       guard let n = Int(argv[i]), n > 0 else {
@@ -109,6 +115,11 @@ func parseArgs(_ argv: [String]) throws -> Args {
   // heartbeat-only / capture-only modes skip required-arg checks so we
   // can wire-test without a model + game window.
   if out.heartbeatOnly || out.captureOnly { return out }
+  // preprocess-test needs --game-window but not a model.
+  if out.preprocessTest {
+    if out.gameWindow == nil { throw ArgsError.missing("--game-window") }
+    return out
+  }
   if out.modelPath == nil { throw ArgsError.missing("--model") }
   // inference-test mode loads the model but doesn't capture, so
   // --game-window is irrelevant.
@@ -127,6 +138,7 @@ func printUsage() {
       PerceptionSidecar --heartbeat-only [--fps 10]
       PerceptionSidecar --capture-only [--fps 30] [--display <id>]
       PerceptionSidecar --inference-test --model <path> [--iters 50]
+      PerceptionSidecar --preprocess-test --game-window x,y,w,h [--iters 50]
 
     Emits NDJSON on stdout, one record per inferred frame:
       {"t":12345,"frameId":7,"tracks":[...],"detRaw":N}
