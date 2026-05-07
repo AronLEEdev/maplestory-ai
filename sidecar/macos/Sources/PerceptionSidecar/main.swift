@@ -35,14 +35,10 @@ if parsed.captureOnly {
   dispatchMain()
 }
 
-if !parsed.heartbeatOnly && !parsed.captureOnly && !parsed.inferenceTest && !parsed.preprocessTest {
-  // Real mode (capture + inference + tracker) lands in task 8. Until then
-  // require one of the test-mode flags.
-  FileHandle.standardError.write(
-    "error: real-mode pipeline not implemented yet (task 8). Run with --heartbeat-only, --capture-only, --inference-test, or --preprocess-test for now.\n"
-      .data(using: .utf8)!
-  )
-  exit(1)
+if !parsed.heartbeatOnly {
+  // Real mode: continuous perception → NDJSON on stdout.
+  runRealMode(parsed: parsed)
+  dispatchMain()
 }
 
 // Heartbeat loop: emit one empty frame per period until SIGINT/SIGTERM.
